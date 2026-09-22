@@ -55,7 +55,7 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next) => {
 	const row = await c.env.DB.prepare(
 		`SELECT k.id AS k_id, k.user_id, k.name, k.key_prefix, k.key_hash, k.created_at AS k_created_at,
 		        k.last_used_at, k.revoked_at,
-		        u.id AS u_id, u.email, u.created_at AS u_created_at
+		        u.id AS u_id, u.email, u.created_at AS u_created_at, u.monitor_limit
 		   FROM api_keys k
 		   JOIN users u ON u.id = k.user_id
 		  WHERE k.key_hash = ? AND k.revoked_at IS NULL`,
@@ -81,6 +81,7 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next) => {
 		id: row.u_id as string,
 		email: row.email as string,
 		created_at: row.u_created_at as number,
+		monitor_limit: row.monitor_limit as number,
 	};
 
 	c.set("apiKey", apiKey);

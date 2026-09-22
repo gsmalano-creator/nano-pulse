@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { requireAdminToken, requireApiKey } from "./lib/auth";
 import { runDueChecks } from "./lib/checks";
+import { monitorUsage } from "./lib/limits";
 import admin from "./routes/admin";
 import keys from "./routes/keys";
 import monitors from "./routes/monitors";
@@ -12,6 +13,8 @@ const app = new Hono<AppEnv>();
 
 app.onError((error, c) => {
 	if (error instanceof HTTPException) {
+		// Routes that need a machine-readable code build their own response.
+		if (error.res) return error.res;
 		return c.json(
 			{ error: { code: statusCode(error.status), message: error.message } },
 			error.status,
@@ -31,6 +34,8 @@ function statusCode(status: number): string {
 			return "unauthorized";
 		case 404:
 			return "not_found";
+		case 403:
+			return "forbidden";
 		case 409:
 			return "conflict";
 		case 503:
@@ -88,12 +93,13 @@ v1.route("/keys", keys);
 // Manual sweep, scoped to the caller. Useful while testing without waiting for cron.
 v1.post("/checks/run", async (c) => c.json(await runDueChecks(c.env, { userId: c.get("user").id })));
 
-v1.get("/whoami", (c) => {
+v1.get("/whoami", async (c) => {
 	const user = c.get("user");
 	const apiKey = c.get("apiKey");
 	return c.json({
 		user: { email: user.email },
 		api_key: { name: apiKey.name, prefix: apiKey.key_prefix },
+		monitors: await monitorUsage(c.env, user),
 	});
 });
 

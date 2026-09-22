@@ -4,6 +4,8 @@ export interface UserRow {
 	id: string;
 	email: string;
 	created_at: number;
+	/** Maximum number of monitors this user may create. */
+	monitor_limit: number;
 }
 
 export interface ApiKeyRow {

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { newId } from "../lib/ids";
+import { assertMonitorQuota } from "../lib/limits";
 import {
 	DEFAULT_GRACE_SECONDS,
 	DEFAULT_INTERVAL_SECONDS,
@@ -78,6 +79,8 @@ monitors.post("/", async (c) => {
 			message: `Monitor '${slug}' already exists. Use PATCH to change it.`,
 		});
 	}
+
+	await assertMonitorQuota(c.env, c.get("user"));
 
 	await c.env.DB.prepare(
 		`INSERT INTO monitors (id, user_id, slug, name, expected_interval_seconds, grace_period_seconds,

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { recordEvent } from "../lib/alerts";
 import { newId } from "../lib/ids";
+import { assertMonitorQuota } from "../lib/limits";
 import {
 	DEFAULT_GRACE_SECONDS,
 	DEFAULT_INTERVAL_SECONDS,
@@ -40,27 +41,37 @@ ping.on(["POST", "GET"], "/:slug", async (c) => {
 	const graceOverride = c.req.query("grace");
 	const reportedStatus = c.req.query("status") === "fail" ? "fail" : "ok";
 
-	// Auto-provision on first ping so customers can start without a setup call.
-	// ON CONFLICT makes two simultaneous first pings safe.
-	await c.env.DB.prepare(
-		`INSERT INTO monitors (id, user_id, slug, expected_interval_seconds, grace_period_seconds, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (user_id, slug) DO NOTHING`,
-	)
-		.bind(
-			newId("mon"),
-			user.id,
-			slug,
-			intervalOverride === undefined ? DEFAULT_INTERVAL_SECONDS : parseInterval(intervalOverride),
-			graceOverride === undefined ? DEFAULT_GRACE_SECONDS : parseGrace(graceOverride),
-			now,
-			now,
-		)
-		.run();
-
-	const monitor = await c.env.DB.prepare("SELECT * FROM monitors WHERE user_id = ? AND slug = ?")
+	// The common case is a ping to a monitor that already exists, so look it up
+	// first: that path stays a single query and is never blocked by quota.
+	let monitor = await c.env.DB.prepare("SELECT * FROM monitors WHERE user_id = ? AND slug = ?")
 		.bind(user.id, slug)
 		.first<MonitorRow>();
+
+	if (!monitor) {
+		// Auto-provision on first ping so customers can start without a setup call.
+		// Quota applies here, and ON CONFLICT makes two simultaneous first pings safe.
+		await assertMonitorQuota(c.env, user);
+
+		await c.env.DB.prepare(
+			`INSERT INTO monitors (id, user_id, slug, expected_interval_seconds, grace_period_seconds, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT (user_id, slug) DO NOTHING`,
+		)
+			.bind(
+				newId("mon"),
+				user.id,
+				slug,
+				intervalOverride === undefined ? DEFAULT_INTERVAL_SECONDS : parseInterval(intervalOverride),
+				graceOverride === undefined ? DEFAULT_GRACE_SECONDS : parseGrace(graceOverride),
+				now,
+				now,
+			)
+			.run();
+
+		monitor = await c.env.DB.prepare("SELECT * FROM monitors WHERE user_id = ? AND slug = ?")
+			.bind(user.id, slug)
+			.first<MonitorRow>();
+	}
 
 	if (!monitor) {
 		// Should be unreachable: the insert above either created or found the row.

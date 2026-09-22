@@ -33,6 +33,7 @@ All `/v1/*` endpoints require `Authorization: Bearer <api_key>`.
 | `POST` | `/v1/keys` | Issue an additional key, for rotation |
 | `DELETE` | `/v1/keys/:id` | Revoke a key |
 | `POST` | `/v1/admin/users` | Provision a customer. Requires the `ADMIN_TOKEN` secret, not an API key |
+| `PATCH` | `/v1/admin/users/:email` | Change a customer's `monitor_limit`. Requires `ADMIN_TOKEN` |
 
 ### Ping
 
@@ -88,6 +89,35 @@ the one chance to capture it. Calling the endpoint again with the same email reu
 just adds another key (`user_created: false`). If `ADMIN_TOKEN` is not set, the admin routes answer
 503 rather than running unprotected.
 
+### Quotas
+
+Each user has a `monitor_limit` (default 5). There is no plan catalogue — a "plan" is just that
+number, so upgrading a customer is one call:
+
+```bash
+curl -X PATCH https://pulse.nano-api.com/v1/admin/users/customer@example.com \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d '{"monitor_limit":100}'
+```
+
+It can also be set when provisioning (`{"email":"...","monitor_limit":100}`), and customers see
+their own usage in `GET /v1/whoami`:
+
+```json
+{ "monitors": { "used": 3, "limit": 5, "remaining": 2 } }
+```
+
+The limit guards monitor *creation* only — both `POST /v1/monitors` and the auto-create on first
+ping, which answer:
+
+```json
+{ "error": { "code": "monitor_limit_reached", "message": "...", "used": 5, "limit": 5 } }
+```
+
+Pings to monitors that already exist are never rejected for quota reasons, so lowering a limit can
+never silently stop a customer's monitoring. Deleting a monitor frees a slot immediately. For an
+effectively unlimited customer, set a large number.
+
 ### Key rotation (self-service)
 
 The API key is the customer's whole identity — there is no login, so key management is authenticated
@@ -129,7 +159,7 @@ npm run check                          # tsc + wrangler deploy --dry-run
 
 `migrations/0001_init_pulse_schema.sql` creates:
 
-- `users` — id, email.
+- `users` — id, email, `monitor_limit`.
 - `api_keys` — SHA-256 hash of the key (never the key itself), plus a display prefix and
   `last_used_at` / `revoked_at`. A user can hold several keys, which is how rotation works.
 - `monitors` — one per watched job: slug, interval, grace, status, `last_ping_at`, webhook.
