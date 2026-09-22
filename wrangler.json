@@ -1,0 +1,16 @@
+{
+	"compatibility_date": "2025-10-08",
+	"main": "src/index.ts",
+	"name": "nano-pulse",
+	"upload_source_maps": true,
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_id": "26597d92-2fc7-47ed-9a13-239c254de7fc",
+			"database_name": "nano-pulse-db"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}
