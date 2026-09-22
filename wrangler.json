@@ -1,8 +1,14 @@
 {
-	"compatibility_date": "2025-10-08",
-	"main": "src/index.ts",
 	"name": "nano-pulse",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-10-08",
 	"upload_source_maps": true,
+	"routes": [
+		{
+			"pattern": "pulse.nano-api.com",
+			"custom_domain": true
+		}
+	],
 	"d1_databases": [
 		{
 			"binding": "DB",
@@ -10,6 +16,11 @@
 			"database_name": "nano-pulse-db"
 		}
 	],
+	"triggers": {
+		"crons": [
+			"*/5 * * * *"
+		]
+	},
 	"observability": {
 		"enabled": true
 	}
