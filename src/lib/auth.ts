@@ -4,11 +4,40 @@ import { sha256Hex } from "./keys";
 import { nowSeconds } from "./time";
 import type { ApiKeyRow, AppEnv, UserRow } from "../types";
 
-function bearerToken(header: string | undefined): string | null {
+export function bearerToken(header: string | undefined): string | null {
 	if (!header) return null;
 	const match = /^Bearer\s+(.+)$/i.exec(header.trim());
 	return match ? match[1].trim() : null;
 }
+
+/**
+ * Compares two secrets without leaking their contents through timing: both are
+ * hashed first, so the comparison always runs over equal-length digests.
+ */
+async function secretsMatch(a: string, b: string): Promise<boolean> {
+	const [hashA, hashB] = await Promise.all([sha256Hex(a), sha256Hex(b)]);
+	return hashA === hashB;
+}
+
+/**
+ * Guards the admin routes with the ADMIN_TOKEN secret. When the secret is not
+ * configured the routes are unavailable rather than unprotected.
+ */
+export const requireAdminToken = createMiddleware<AppEnv>(async (c, next) => {
+	const configured = c.env.ADMIN_TOKEN;
+	if (!configured) {
+		throw new HTTPException(503, {
+			message: "Admin API is not configured. Set the ADMIN_TOKEN secret.",
+		});
+	}
+
+	const token = bearerToken(c.req.header("authorization"));
+	if (!token || !(await secretsMatch(token, configured))) {
+		throw new HTTPException(401, { message: "Invalid admin token." });
+	}
+
+	await next();
+});
 
 /**
  * Resolves `Authorization: Bearer <api_key>` to a user. Only the SHA-256 hash of

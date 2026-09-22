@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { requireApiKey } from "./lib/auth";
+import { requireAdminToken, requireApiKey } from "./lib/auth";
 import { runDueChecks } from "./lib/checks";
+import admin from "./routes/admin";
+import keys from "./routes/keys";
 import monitors from "./routes/monitors";
 import ping from "./routes/ping";
 import type { AppEnv } from "./types";
@@ -31,6 +33,8 @@ function statusCode(status: number): string {
 			return "not_found";
 		case 409:
 			return "conflict";
+		case 503:
+			return "unavailable";
 		default:
 			return "error";
 	}
@@ -49,6 +53,9 @@ app.get("/", (c) =>
 			update_monitor: "PATCH /v1/monitors/:slug",
 			delete_monitor: "DELETE /v1/monitors/:slug",
 			run_checks: "POST /v1/checks/run",
+			list_keys: "GET /v1/keys",
+			create_key: "POST /v1/keys",
+			revoke_key: "DELETE /v1/keys/:id",
 		},
 		path_alias: "Every /v1/* route is also served under /pulse/v1/*.",
 		auth: "Authorization: Bearer <api_key>",
@@ -65,10 +72,18 @@ app.get("/health", async (c) => {
 	}
 });
 
+// Operator-only routes, guarded by the ADMIN_TOKEN secret rather than an API key.
+// Mounted before the API-key middleware so the two auth schemes stay separate.
+const adminApi = new Hono<AppEnv>();
+adminApi.use("*", requireAdminToken);
+adminApi.route("/", admin);
+app.route("/v1/admin", adminApi);
+
 const v1 = new Hono<AppEnv>();
 v1.use("*", requireApiKey);
 v1.route("/ping", ping);
 v1.route("/monitors", monitors);
+v1.route("/keys", keys);
 
 // Manual sweep, scoped to the caller. Useful while testing without waiting for cron.
 v1.post("/checks/run", async (c) => c.json(await runDueChecks(c.env, { userId: c.get("user").id })));

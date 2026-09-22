@@ -50,9 +50,17 @@ export interface MonitorEventRow {
 	created_at: number;
 }
 
-/** Hono generics: D1 binding plus the authenticated caller. */
+/**
+ * `Env` is generated from wrangler.json and covers the D1 binding. ADMIN_TOKEN is
+ * a secret set with `wrangler secret put` (or .dev.vars locally), so it is not in
+ * the generated types and is declared here instead. Optional on purpose: the admin
+ * routes refuse to serve when it is missing rather than falling open.
+ */
+export type AppBindings = Env & { ADMIN_TOKEN?: string };
+
+/** Hono generics: bindings plus the authenticated caller. */
 export type AppEnv = {
-	Bindings: Env;
+	Bindings: AppBindings;
 	Variables: {
 		user: UserRow;
 		apiKey: ApiKeyRow;

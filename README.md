@@ -29,6 +29,10 @@ All `/v1/*` endpoints require `Authorization: Bearer <api_key>`.
 | `PATCH` | `/v1/monitors/:slug` | Update `name`, `expected_interval_seconds`, `grace_period_seconds`, `alert_webhook_url`, `paused` |
 | `DELETE` | `/v1/monitors/:slug` | Delete a monitor and its history |
 | `POST` | `/v1/checks/run` | Run the overdue sweep for your own monitors (the cron does this every 5 minutes) |
+| `GET` | `/v1/keys` | List your API keys (prefixes only — full keys are unrecoverable) |
+| `POST` | `/v1/keys` | Issue an additional key, for rotation |
+| `DELETE` | `/v1/keys/:id` | Revoke a key |
+| `POST` | `/v1/admin/users` | Provision a customer. Requires the `ADMIN_TOKEN` secret, not an API key |
 
 ### Ping
 
@@ -65,13 +69,48 @@ curl -X PATCH http://localhost:8787/v1/monitors/nightly-backup \
 Every transition is stored in `monitor_events` with a `notified` flag, so undelivered alerts are
 visible in `GET /v1/monitors/:slug`.
 
+## Provisioning customers
+
+Customers are provisioned from the terminal with the admin endpoint, which is guarded by the
+`ADMIN_TOKEN` secret instead of an API key:
+
+```bash
+npx wrangler secret put ADMIN_TOKEN      # once per environment
+
+curl -X POST https://pulse.nano-api.com/v1/admin/users \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"email":"customer@example.com","name":"Onboarding key"}'
+```
+
+The response contains the plaintext key — it is stored only as a SHA-256 hash, so this response is
+the one chance to capture it. Calling the endpoint again with the same email reuses the user and
+just adds another key (`user_created: false`). If `ADMIN_TOKEN` is not set, the admin routes answer
+503 rather than running unprotected.
+
+### Key rotation (self-service)
+
+The API key is the customer's whole identity — there is no login, so key management is authenticated
+by an existing key:
+
+```bash
+curl -X POST $B/v1/keys -H "Authorization: Bearer $OLD_KEY" -d '{"name":"Rotated key"}'
+curl -X DELETE $B/v1/keys/<old_key_id> -H "Authorization: Bearer $NEW_KEY"
+```
+
+Revoking the key used for the request is refused (409) so nobody can lock themselves out; rotate
+first, then revoke the old key with the new one.
+
 ## Local development
 
 ```bash
 npm install
-npm run dev          # applies migrations + seed, then starts wrangler dev on :8787
-./scripts/smoke.sh   # end-to-end check against the running server
+cp .dev.vars.example .dev.vars   # local ADMIN_TOKEN, gitignored
+npm run dev                      # applies migrations + seed, then starts wrangler dev on :8787
+./scripts/smoke.sh               # end-to-end check against the running server
 ```
+
+`ADMIN_TOKEN=local-admin-token ./scripts/smoke.sh` also exercises the provisioning endpoint.
 
 The seed (`seeds/test-data.sql`) installs a test user and this **local-only** API key:
 
@@ -84,7 +123,6 @@ Useful extras:
 ```bash
 npx wrangler dev --test-scheduled      # then: curl http://localhost:8787/__scheduled
 npm run check                          # tsc + wrangler deploy --dry-run
-node scripts/create-api-key.mjs you@example.com "Laptop key"   # mint a real key + SQL
 ```
 
 ## Data model
@@ -93,7 +131,7 @@ node scripts/create-api-key.mjs you@example.com "Laptop key"   # mint a real key
 
 - `users` — id, email.
 - `api_keys` — SHA-256 hash of the key (never the key itself), plus a display prefix and
-  `last_used_at` / `revoked_at`.
+  `last_used_at` / `revoked_at`. A user can hold several keys, which is how rotation works.
 - `monitors` — one per watched job: slug, interval, grace, status, `last_ping_at`, webhook.
 - `ping_logs` — every received ping with IP, user agent and optional payload.
 - `monitor_events` — `down` / `up` transitions and whether the alert was delivered.
@@ -123,9 +161,9 @@ curl -X POST https://pulse.nano-api.com/v1/ping/nightly-backup \
   -H "Authorization: Bearer $NANOPULSE_API_KEY"
 ```
 
-To create a production API key, run `node scripts/create-api-key.mjs <email> "<name>"` and execute
-the printed SQL with `npx wrangler d1 execute DB --remote --command "..."`. Do **not** run
-`db:seed:remote` against production — that installs the shared test key.
+Set the admin secret once with `npx wrangler secret put ADMIN_TOKEN`, then create API keys with
+`POST /v1/admin/users` as described above. Do **not** run `db:seed:remote` against production —
+that installs the shared test key.
 
 The cron trigger (`*/5 * * * *` in `wrangler.json`) runs the overdue sweep; it only activates on a
 deployed Worker, not in local dev.

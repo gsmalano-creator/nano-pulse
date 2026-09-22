@@ -37,8 +37,22 @@ call POST "/v1/ping/${SLUG}"
 echo "== list monitors =="
 call GET /v1/monitors
 
+echo "== api keys =="
+call GET /v1/keys
+
 echo "== unauthorized (expects 401) =="
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST "${BASE_URL}/v1/ping/${SLUG}"
 
 echo "== cleanup =="
 call DELETE "/v1/monitors/${SLUG}"
+
+# Admin provisioning is only exercised when a token is supplied:
+#   ADMIN_TOKEN=local-admin-token ./scripts/smoke.sh
+if [ -n "${ADMIN_TOKEN:-}" ]; then
+	echo "== admin: provision a user =="
+	curl -sS -X POST "${BASE_URL}/v1/admin/users" \
+		-H "Authorization: Bearer ${ADMIN_TOKEN}" \
+		-H 'content-type: application/json' \
+		-d "{\"email\":\"smoke-${SLUG}@example.com\"}"
+	echo
+fi
