@@ -1,6 +1,6 @@
 # nano-api
 
-Three services in one Worker, sharing one database, one API key and one quota.
+Several small services in one Worker, sharing one database, one API key and one quota.
 
 - **NanoPulse** (`pulse.nano-api.com`) tells you when a job you depend on has stopped running. Your
   job pings on every success; if the ping does not arrive within the expected interval plus a grace
@@ -10,8 +10,8 @@ Three services in one Worker, sharing one database, one API key and one quota.
 - **NanoLock** keeps two of them from running at once: `flock` over HTTP, with a TTL lease, a
   token only the holder knows, and a fencing counter.
 
-Built on Cloudflare Workers + D1 + Hono. One Cron Trigger drives both: the Pulse overdue sweep and
-the Relay run sweep. They share `users`, `api_keys`, the quota and the alert delivery code, which
+Built on Cloudflare Workers + D1 + Hono. One Cron Trigger drives the background work: the Pulse
+overdue sweep, the Relay run sweep and the lock purge. They share `users`, `api_keys`, the quota and the alert delivery code, which
 is the whole reason they live in one Worker.
 
 ## API
