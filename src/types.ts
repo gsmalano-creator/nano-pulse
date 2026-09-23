@@ -75,6 +75,17 @@ export interface ScheduleRow {
 	updated_at: number;
 }
 
+export interface CounterRow {
+	id: string;
+	user_id: string;
+	name: string;
+	value: number;
+	label: string | null;
+	public_id: string;
+	created_at: number;
+	updated_at: number;
+}
+
 export interface ConfigRow {
 	id: string;
 	user_id: string;
@@ -132,6 +143,8 @@ export type AppBindings = Env & {
 	ADMIN_TOKEN?: string;
 	/** Dev-only escape hatch for Relay target validation; never set in production. */
 	RELAY_ALLOW_PRIVATE_TARGETS?: string;
+	/** Where badge URLs point, regardless of which hostname was called. */
+	COUNT_BASE_URL?: string;
 };
 
 /** Hono generics: bindings plus the authenticated caller. */

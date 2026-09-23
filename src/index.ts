@@ -9,7 +9,9 @@ import admin from "./core/routes/admin";
 import keys from "./core/routes/keys";
 import signup from "./core/routes/signup";
 import monitors from "./pulse/routes/monitors";
+import badgeRoutes from "./count/routes/badge";
 import configsRoutes from "./config/routes/configs";
+import countersRoutes from "./count/routes/counters";
 import locksRoutes from "./lock/routes/locks";
 import schedules from "./relay/routes/schedules";
 import ping from "./pulse/routes/ping";
@@ -90,6 +92,11 @@ app.get("/", (c) =>
 			config_revisions: "GET /v1/configs/:name/revisions",
 			rollback_config: "POST /v1/configs/:name/rollback",
 			delete_config: "DELETE /v1/configs/:name",
+			list_counters: "GET /v1/counters",
+			increment_counter: "POST /v1/counters/:name?by=1",
+			set_counter: "PUT /v1/counters/:name",
+			delete_counter: "DELETE /v1/counters/:name",
+			public_badge: "GET /b/:public_id.svg (no key needed)",
 		},
 		path_alias: "Every /v1/* route is also served under /pulse/v1/*.",
 		auth: "Authorization: Bearer <api_key>",
@@ -115,6 +122,10 @@ app.route("/v1/admin", adminApi);
 
 // Signup is mounted before the API-key middleware: it is the one route that
 // cannot require a key, since issuing one is the point.
+// Badges are embedded in READMEs and fetched anonymously, so they sit outside
+// the API-key middleware with their own unguessable id.
+app.route("/b", badgeRoutes);
+
 app.route("/v1/signup", signup);
 app.route("/pulse/v1/signup", signup);
 
@@ -126,6 +137,7 @@ v1.route("/keys", keys);
 v1.route("/schedules", schedules);
 v1.route("/locks", locksRoutes);
 v1.route("/configs", configsRoutes);
+v1.route("/counters", countersRoutes);
 
 // Manual sweep, scoped to the caller. Useful while testing without waiting for cron.
 v1.post("/checks/run", async (c) => c.json(await runDueChecks(c.env, { userId: c.get("user").id })));

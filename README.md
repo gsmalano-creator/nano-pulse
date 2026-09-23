@@ -11,6 +11,7 @@ Several small services in one Worker, sharing one database, one API key and one 
   token only the holder knows, and a fencing counter.
 - **NanoConfig** (`configmaps.nano-api.com`) holds the small JSON documents you would otherwise
   redeploy for: kill switches, feature flags, limits.
+- **NanoCount** (`count.nano-api.com`) counts things, and hands you an SVG badge for the README.
 
 Built on Cloudflare Workers + D1 + Hono. One Cron Trigger drives the background work: the Pulse
 overdue sweep, the Relay run sweep and the lock purge. They share `users`, `api_keys`, the quota and the alert delivery code, which
@@ -62,6 +63,12 @@ All `/v1/*` endpoints require `Authorization: Bearer <api_key>`.
 | `GET` | `/v1/configs/:name/revisions` | The last 20 versions |
 | `POST` | `/v1/configs/:name/rollback` | Restore an old version as a new one |
 | `DELETE` | `/v1/configs/:name` | Delete the document and its history |
+| `GET` | `/v1/counters` | List counters with their badge URLs |
+| `POST` | `/v1/counters/:name` | Increment by 1, or `?by=n`. Creates on first use |
+| `PUT` | `/v1/counters/:name` | Set an exact value |
+| `DELETE` | `/v1/counters/:name` | Delete a counter |
+| `GET` | `/b/:public_id.svg` | The badge. **No key** — see below |
+| `GET` | `/b/:public_id.json` | The value, CORS-open, for a browser to read |
 
 ### Ping
 
@@ -221,6 +228,36 @@ the incident.
 Limits: 32 KB per document, 200 keys, key names `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Documents count
 against the shared quota.
 
+## NanoCount
+
+```bash
+curl -X POST "$B/v1/counters/downloads?label=downloads" -H "Authorization: Bearer $KEY"
+# {"counter":{"value":1,"badge_url":"https://count.nano-api.com/b/pub_…svg", …}}
+
+curl -X POST "$B/v1/counters/downloads?by=5" -H "Authorization: Bearer $KEY"   # value 6
+curl -X PUT  "$B/v1/counters/downloads?value=12300" -H "Authorization: Bearer $KEY"
+```
+
+```markdown
+![downloads](https://count.nano-api.com/b/pub_…svg)
+```
+
+Three things decided here:
+
+- **Increments are atomic.** One upsert adds the step and returns the new value, so two callers
+  cannot read the same number and write it back. Twenty parallel increments produce exactly
+  twenty, which is a thing to verify rather than assume.
+- **The badge needs no key.** GitHub fetches README images anonymously through its own proxy,
+  which cannot send an `Authorization` header, so each counter carries an unguessable
+  `public_id` instead. It scopes access to that one counter and nothing else.
+- **Reads never increment.** A hit counter that counts image fetches sounds clever until a caching
+  proxy sits in front of it: the number then freezes, or a crawler inflates it. Count what your
+  code does, not what a cache does.
+
+`?label=` and `?color=` (green, blue, amber, red, grey) override the badge per request. Values
+shorten past a thousand — `12300` renders as `12k` — because a badge that wide stops being one.
+Counters count against the shared quota.
+
 ## Signing up
 
 ```bash
@@ -282,7 +319,7 @@ It can also be set when provisioning (`{"email":"...","monitor_limit":100}`), an
 their own usage in `GET /v1/whoami`:
 
 ```json
-{ "usage": { "monitors": 1, "schedules": 3, "configs": 1, "used": 5, "limit": 5, "remaining": 0 } }
+{ "usage": { "monitors": 1, "schedules": 2, "configs": 1, "counters": 1, "used": 5, "limit": 5 } }
 ```
 
 The limit guards *creation* only — `POST /v1/monitors`, the auto-create on first ping,
@@ -343,6 +380,7 @@ src/pulse/   heartbeat monitoring: monitors, the overdue sweep, ping and monitor
 src/relay/   scheduled calls: cron parsing, the run engine, target URL guard, routes
 src/lock/    mutual exclusion: lease acquire/renew/release, fencing, routes
 src/config/  small JSON documents: validation, merge, versioning, revisions, routes
+src/count/   counters and the SVG badge renderer, plus the public badge route
 ```
 
 The boundary is deliberate. `core` knows nothing about monitors or schedules, which is what keeps
@@ -366,6 +404,7 @@ true yet.
 - `locks` — one row per (user, lock name): current token, owner, lease expiry and the fence
   counter, which outlives any individual acquisition.
 - `configs` / `config_revisions` — the current document and its last 20 versions.
+- `counters` — value, default label, and the public id the badge is served under.
 
 All timestamps are unix epoch seconds (UTC) in the database and ISO-8601 in the API.
 

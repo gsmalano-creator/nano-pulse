@@ -10,6 +10,7 @@ export interface QuotaUsage {
 	monitors: number;
 	schedules: number;
 	configs: number;
+	counters: number;
 	used: number;
 	limit: number;
 	remaining: number;
@@ -19,20 +20,23 @@ export async function quotaUsage(env: AppBindings, user: UserRow): Promise<Quota
 	const row = await env.DB.prepare(
 		`SELECT (SELECT count(*) FROM monitors WHERE user_id = ?1) AS monitors,
 		        (SELECT count(*) FROM schedules WHERE user_id = ?1) AS schedules,
-		        (SELECT count(*) FROM configs WHERE user_id = ?1) AS configs`,
+		        (SELECT count(*) FROM configs WHERE user_id = ?1) AS configs,
+		        (SELECT count(*) FROM counters WHERE user_id = ?1) AS counters`,
 	)
 		.bind(user.id)
-		.first<{ monitors: number; schedules: number; configs: number }>();
+		.first<{ monitors: number; schedules: number; configs: number; counters: number }>();
 
 	const monitors = row?.monitors ?? 0;
 	const schedules = row?.schedules ?? 0;
 	const configs = row?.configs ?? 0;
-	const used = monitors + schedules + configs;
+	const counters = row?.counters ?? 0;
+	const used = monitors + schedules + configs + counters;
 
 	return {
 		monitors,
 		schedules,
 		configs,
+		counters,
 		used,
 		limit: user.monitor_limit,
 		remaining: Math.max(0, user.monitor_limit - used),
@@ -48,7 +52,7 @@ export async function quotaUsage(env: AppBindings, user: UserRow): Promise<Quota
 export async function assertQuota(
 	env: AppBindings,
 	user: UserRow,
-	kind: "monitor" | "schedule" | "config",
+	kind: "monitor" | "schedule" | "config" | "counter",
 ): Promise<void> {
 	const usage = await quotaUsage(env, user);
 	if (usage.remaining > 0) return;
@@ -64,6 +68,7 @@ export async function assertQuota(
 					monitors: usage.monitors,
 					schedules: usage.schedules,
 					configs: usage.configs,
+					counters: usage.counters,
 				},
 			},
 			{ status: 403 },
