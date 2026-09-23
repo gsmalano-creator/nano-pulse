@@ -40,7 +40,8 @@ All `/v1/*` endpoints require `Authorization: Bearer <api_key>`.
 | `GET` | `/v1/keys` | List your API keys (prefixes only — full keys are unrecoverable) |
 | `POST` | `/v1/keys` | Issue an additional key, for rotation |
 | `DELETE` | `/v1/keys/:id` | Revoke a key |
-| `POST` | `/v1/admin/users` | Provision a customer. Requires the `ADMIN_TOKEN` secret, not an API key |
+| `POST` | `/v1/signup` | Self-service. The one route that needs no key, since issuing one is the point |
+| `POST` | `/v1/admin/users` | Provision a customer yourself. Requires the `ADMIN_TOKEN` secret |
 | `PATCH` | `/v1/admin/users/:email` | Change a customer's `monitor_limit`. Requires `ADMIN_TOKEN` |
 | `GET` | `/v1/schedules` | List schedules (Relay) |
 | `POST` | `/v1/schedules` | Create a schedule |
@@ -219,6 +220,33 @@ the incident.
 
 Limits: 32 KB per document, 200 keys, key names `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Documents count
 against the shared quota.
+
+## Signing up
+
+```bash
+curl -X POST https://pulse.nano-api.com/v1/signup \
+  -H 'content-type: application/json' -d '{"email":"you@example.com"}'
+# 201 {"api_key":"np_live_…","quota":5,"note":"Store this key now …"}
+```
+
+No email verification: the key is the credential, the address is a label and a way to reach you.
+Verification would add an email provider, a delivery problem and a click, and would stop nobody
+determined. Abuse is bounded by rate limits instead.
+
+**Limits** (in `src/core/signup.ts`, enforced in D1 rather than memory — Workers run in many
+places at once, so an in-isolate counter would reset on every cold start and never see the other
+edges):
+
+- 3 signups per IP per hour, 5 per day
+- 60 per hour across the whole service, so a distributed attempt still meets a ceiling
+
+Over the line answers `429` with `Retry-After` and a `rate_limited` code. A known email answers
+`409` — which does reveal that an address is registered, a trade accepted here because there is no
+password to attack and no personal data behind it.
+
+The `signups` table doubles as an audit trail: address, IP, user agent, and which user was created.
+Worth a Cloudflare WAF rate-limiting rule in front of the route as a second layer; this one
+survives without it, but cheaper traffic is better traffic.
 
 ## Provisioning customers
 

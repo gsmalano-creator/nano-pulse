@@ -7,6 +7,7 @@ import { runDueSchedules } from "./relay/runner";
 import { quotaUsage } from "./core/limits";
 import admin from "./core/routes/admin";
 import keys from "./core/routes/keys";
+import signup from "./core/routes/signup";
 import monitors from "./pulse/routes/monitors";
 import configsRoutes from "./config/routes/configs";
 import locksRoutes from "./lock/routes/locks";
@@ -43,6 +44,8 @@ function statusCode(status: number): string {
 			return "forbidden";
 		case 409:
 			return "conflict";
+		case 429:
+			return "rate_limited";
 		case 503:
 			return "unavailable";
 		default:
@@ -64,6 +67,7 @@ app.get("/", (c) =>
 			update_monitor: "PATCH /v1/monitors/:slug",
 			delete_monitor: "DELETE /v1/monitors/:slug",
 			run_checks: "POST /v1/checks/run",
+			sign_up: "POST /v1/signup (no key needed — this is how you get one)",
 			list_keys: "GET /v1/keys",
 			create_key: "POST /v1/keys",
 			revoke_key: "DELETE /v1/keys/:id",
@@ -108,6 +112,11 @@ const adminApi = new Hono<AppEnv>();
 adminApi.use("*", requireAdminToken);
 adminApi.route("/", admin);
 app.route("/v1/admin", adminApi);
+
+// Signup is mounted before the API-key middleware: it is the one route that
+// cannot require a key, since issuing one is the point.
+app.route("/v1/signup", signup);
+app.route("/pulse/v1/signup", signup);
 
 const v1 = new Hono<AppEnv>();
 v1.use("*", requireApiKey);
