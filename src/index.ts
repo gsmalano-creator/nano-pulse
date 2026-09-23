@@ -8,6 +8,7 @@ import { quotaUsage } from "./core/limits";
 import admin from "./core/routes/admin";
 import keys from "./core/routes/keys";
 import monitors from "./pulse/routes/monitors";
+import configsRoutes from "./config/routes/configs";
 import locksRoutes from "./lock/routes/locks";
 import schedules from "./relay/routes/schedules";
 import ping from "./pulse/routes/ping";
@@ -53,7 +54,7 @@ app.get("/", (c) =>
 	c.json({
 		service: "nano-api",
 		description:
-			"NanoPulse tells you when a job you depend on has stopped running. NanoRelay runs the job for you. NanoLock keeps two of them from running at once.",
+			"Small APIs that each do one thing: notice when a job stops running, run it on schedule, keep two copies from running at once, and hold the config you would otherwise redeploy for.",
 		version: "v1",
 		endpoints: {
 			ping: "POST /v1/ping/:slug",
@@ -77,6 +78,14 @@ app.get("/", (c) =>
 			lock_status: "GET /v1/locks/:name",
 			renew_lock: "POST /v1/locks/:name/renew",
 			release_lock: "DELETE /v1/locks/:name",
+			list_configs: "GET /v1/configs",
+			read_config: "GET /v1/configs/:name",
+			read_config_key: "GET /v1/configs/:name/keys/:key",
+			write_config: "PUT /v1/configs/:name",
+			patch_config: "PATCH /v1/configs/:name",
+			config_revisions: "GET /v1/configs/:name/revisions",
+			rollback_config: "POST /v1/configs/:name/rollback",
+			delete_config: "DELETE /v1/configs/:name",
 		},
 		path_alias: "Every /v1/* route is also served under /pulse/v1/*.",
 		auth: "Authorization: Bearer <api_key>",
@@ -107,6 +116,7 @@ v1.route("/monitors", monitors);
 v1.route("/keys", keys);
 v1.route("/schedules", schedules);
 v1.route("/locks", locksRoutes);
+v1.route("/configs", configsRoutes);
 
 // Manual sweep, scoped to the caller. Useful while testing without waiting for cron.
 v1.post("/checks/run", async (c) => c.json(await runDueChecks(c.env, { userId: c.get("user").id })));

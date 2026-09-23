@@ -75,6 +75,26 @@ export interface ScheduleRow {
 	updated_at: number;
 }
 
+export interface ConfigRow {
+	id: string;
+	user_id: string;
+	name: string;
+	/** JSON object, serialised. */
+	data: string;
+	version: number;
+	created_at: number;
+	updated_at: number;
+}
+
+export interface ConfigRevisionRow {
+	id: number;
+	config_id: string;
+	version: number;
+	data: string;
+	note: string | null;
+	created_at: number;
+}
+
 export interface LockRow {
 	id: string;
 	user_id: string;

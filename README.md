@@ -9,6 +9,8 @@ Several small services in one Worker, sharing one database, one API key and one 
   schedule, with timezone-correct timing, retries, timeouts and alerting on failure.
 - **NanoLock** keeps two of them from running at once: `flock` over HTTP, with a TTL lease, a
   token only the holder knows, and a fencing counter.
+- **NanoConfig** (`configmaps.nano-api.com`) holds the small JSON documents you would otherwise
+  redeploy for: kill switches, feature flags, limits.
 
 Built on Cloudflare Workers + D1 + Hono. One Cron Trigger drives the background work: the Pulse
 overdue sweep, the Relay run sweep and the lock purge. They share `users`, `api_keys`, the quota and the alert delivery code, which
@@ -51,6 +53,14 @@ All `/v1/*` endpoints require `Authorization: Bearer <api_key>`.
 | `GET` | `/v1/locks/:name` | Status, without revealing the holder's token |
 | `POST` | `/v1/locks/:name/renew` | Extend the lease. Requires the token |
 | `DELETE` | `/v1/locks/:name` | Release. Requires the token |
+| `GET` | `/v1/configs` | List config documents |
+| `GET` | `/v1/configs/:name` | Read a document. Sends an `ETag`; honours `If-None-Match` |
+| `GET` | `/v1/configs/:name/keys/:key` | Read one value |
+| `PUT` | `/v1/configs/:name` | Replace the document, creating it if absent |
+| `PATCH` | `/v1/configs/:name` | Merge keys; `null` removes one |
+| `GET` | `/v1/configs/:name/revisions` | The last 20 versions |
+| `POST` | `/v1/configs/:name/rollback` | Restore an old version as a new one |
+| `DELETE` | `/v1/configs/:name` | Delete the document and its history |
 
 ### Ping
 
@@ -176,6 +186,40 @@ TTL above your worst-case runtime, and use the fence where correctness actually 
 Locks do **not** count against the monitor/schedule quota — that quota is for things we watch or
 run for you. There is a ceiling of 100 distinct lock names per user, purely to bound abuse.
 
+## NanoConfig
+
+```bash
+curl -X PUT "$B/v1/configs/checkout" -H "Authorization: Bearer $KEY" \
+  -H 'content-type: application/json' \
+  -d '{"maintenance": false, "max_items": 50, "rollout": {"eu": 0.25}}'
+
+# The kill switch, from anywhere
+curl -X PATCH "$B/v1/configs/checkout?note=incident-4711" -H "Authorization: Bearer $KEY" \
+  -H 'content-type: application/json' -H 'if-match: "1"' \
+  -d '{"maintenance": true}'
+
+curl -s "$B/v1/configs/checkout/keys/maintenance" -H "Authorization: Bearer $KEY"
+# {"name":"checkout","key":"maintenance","value":true,"version":2}
+```
+
+Three decisions worth knowing:
+
+- **Polling is cheap.** Reads carry an `ETag` of the version; send `If-None-Match` and an unchanged
+  document answers `304` with no body. A process can check every few seconds without cost.
+- **Concurrent writes do not clobber.** `If-Match: "7"` writes only if the document is still at
+  version 7, and the check and the write are one statement. The loser gets `412` with both version
+  numbers, rather than silently winning.
+- **Rollback moves forward.** Restoring version 1 writes its content as a *new* version, never
+  rewinding the counter — for the same reason the lock's fence never goes backwards: a client
+  caching by version must never see one number mean two things.
+
+`PATCH` merges at the top level and a `null` value removes a key. The last 20 versions are kept
+with an optional `?note=`, which is what you read afterwards to see who flipped the switch during
+the incident.
+
+Limits: 32 KB per document, 200 keys, key names `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Documents count
+against the shared quota.
+
 ## Provisioning customers
 
 Customers are provisioned from the terminal with the admin endpoint, which is guarded by the
@@ -197,8 +241,8 @@ just adds another key (`user_created: false`). If `ADMIN_TOKEN` is not set, the 
 
 ### Quotas
 
-Each user has a `monitor_limit` (default 5), and it covers **monitors and schedules together** — a
-plan is one integer, not a catalogue, so upgrading a customer is one call:
+Each user has a `monitor_limit` (default 5), and it covers **monitors, schedules and configs
+together** — a plan is one integer, not a catalogue, so upgrading a customer is one call:
 
 ```bash
 curl -X PATCH https://pulse.nano-api.com/v1/admin/users/customer@example.com \
@@ -210,11 +254,11 @@ It can also be set when provisioning (`{"email":"...","monitor_limit":100}`), an
 their own usage in `GET /v1/whoami`:
 
 ```json
-{ "usage": { "monitors": 1, "schedules": 3, "used": 4, "limit": 5, "remaining": 1 } }
+{ "usage": { "monitors": 1, "schedules": 3, "configs": 1, "used": 5, "limit": 5, "remaining": 0 } }
 ```
 
-The limit guards *creation* only — `POST /v1/monitors`, the auto-create on first ping, and
-`POST /v1/schedules` — which answer:
+The limit guards *creation* only — `POST /v1/monitors`, the auto-create on first ping,
+`POST /v1/schedules` and the first `PUT` of a config — which answer:
 
 ```json
 { "error": { "code": "quota_exceeded", "message": "...", "used": 5, "limit": 5 } }
@@ -270,6 +314,7 @@ src/core/    identity and plumbing every service shares: API-key auth, key minti
 src/pulse/   heartbeat monitoring: monitors, the overdue sweep, ping and monitor routes
 src/relay/   scheduled calls: cron parsing, the run engine, target URL guard, routes
 src/lock/    mutual exclusion: lease acquire/renew/release, fencing, routes
+src/config/  small JSON documents: validation, merge, versioning, revisions, routes
 ```
 
 The boundary is deliberate. `core` knows nothing about monitors or schedules, which is what keeps
@@ -292,6 +337,7 @@ true yet.
   excerpt.
 - `locks` — one row per (user, lock name): current token, owner, lease expiry and the fence
   counter, which outlives any individual acquisition.
+- `configs` / `config_revisions` — the current document and its last 20 versions.
 
 All timestamps are unix epoch seconds (UTC) in the database and ISO-8601 in the API.
 
