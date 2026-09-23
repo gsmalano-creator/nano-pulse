@@ -1,17 +1,21 @@
-# NanoPulse
+# nano-api
 
-A dead man's switch for cron jobs, background workers and servers — the first service under
-`nano-api.com`, served from `pulse.nano-api.com`.
+Two services in one Worker, sharing one database, one API key and one quota.
 
-Your job POSTs a ping on every successful run. If a ping does not arrive within the expected
-interval plus a grace period, NanoPulse marks the monitor as **down** and (optionally) posts an
-alert to a webhook.
+- **NanoPulse** (`pulse.nano-api.com`) tells you when a job you depend on has stopped running. Your
+  job pings on every success; if the ping does not arrive within the expected interval plus a grace
+  period, the monitor goes **down** and an alert goes out.
+- **NanoRelay** (`relay.nano-api.com`) is the other half: we call *your* endpoint on a cron
+  schedule, with timezone-correct timing, retries, timeouts and alerting on failure.
 
-Built on Cloudflare Workers + D1 + Hono, with a Cron Trigger doing the overdue sweep.
+Built on Cloudflare Workers + D1 + Hono. One Cron Trigger drives both: the Pulse overdue sweep and
+the Relay run sweep. They share `users`, `api_keys`, the quota and the alert delivery code, which
+is the whole reason they live in one Worker.
 
 ## API
 
-Base URL in production: `https://pulse.nano-api.com`. Locally: `http://localhost:8787`.
+Base URL in production: `https://pulse.nano-api.com` or `https://relay.nano-api.com` — both
+hostnames serve the same API. Locally: `http://localhost:8787`.
 
 Every `/v1/*` route is also served under `/pulse/v1/*`, so the same Worker can later sit behind a
 shared `api.nano-api.com` gateway without breaking clients.
@@ -28,12 +32,18 @@ All `/v1/*` endpoints require `Authorization: Bearer <api_key>`.
 | `GET` | `/v1/monitors/:slug` | Monitor detail + last 20 pings and events |
 | `PATCH` | `/v1/monitors/:slug` | Update `name`, `expected_interval_seconds`, `grace_period_seconds`, `alert_webhook_url`, `paused` |
 | `DELETE` | `/v1/monitors/:slug` | Delete a monitor and its history |
-| `POST` | `/v1/checks/run` | Run the overdue sweep for your own monitors (the cron does this every 5 minutes) |
+| `POST` | `/v1/checks/run` | Run the overdue sweep for your own monitors (the cron does this every minute) |
 | `GET` | `/v1/keys` | List your API keys (prefixes only — full keys are unrecoverable) |
 | `POST` | `/v1/keys` | Issue an additional key, for rotation |
 | `DELETE` | `/v1/keys/:id` | Revoke a key |
 | `POST` | `/v1/admin/users` | Provision a customer. Requires the `ADMIN_TOKEN` secret, not an API key |
 | `PATCH` | `/v1/admin/users/:email` | Change a customer's `monitor_limit`. Requires `ADMIN_TOKEN` |
+| `GET` | `/v1/schedules` | List schedules (Relay) |
+| `POST` | `/v1/schedules` | Create a schedule |
+| `GET` | `/v1/schedules/:slug` | Schedule detail + last 20 runs |
+| `PATCH` | `/v1/schedules/:slug` | Update any field, including `paused` |
+| `DELETE` | `/v1/schedules/:slug` | Delete a schedule and its run history |
+| `POST` | `/v1/schedules/:slug/run` | Run now, without moving the schedule's own clock |
 
 ### Ping
 
@@ -70,6 +80,55 @@ curl -X PATCH http://localhost:8787/v1/monitors/nightly-backup \
 Every transition is stored in `monitor_events` with a `notified` flag, so undelivered alerts are
 visible in `GET /v1/monitors/:slug`.
 
+## NanoRelay
+
+```bash
+curl -X POST https://relay.nano-api.com/v1/schedules \
+  -H "Authorization: Bearer $NANOPULSE_API_KEY" -H 'content-type: application/json' \
+  -d '{
+    "slug": "nightly-report",
+    "cron": "0 3 * * *",
+    "timezone": "Europe/Oslo",
+    "url": "https://api.example.com/jobs/nightly-report",
+    "body": {"source": "relay"},
+    "max_attempts": 3,
+    "timeout_seconds": 30,
+    "alert_webhook_url": "https://hooks.slack.com/services/..."
+  }'
+```
+
+- **Timezone-correct cron.** Five-field expressions evaluated in any IANA zone, so `0 3 * * *` in
+  `Europe/Oslo` stays at 03:00 local across DST instead of drifting an hour twice a year.
+  A nonexistent local time (spring forward) runs at the equivalent instant after the gap rather
+  than being skipped; an ambiguous one (fall back) runs on its first instant. `test/cron.test.ts`
+  pins all of this.
+- **Retries.** Up to `max_attempts` (max 3) per run with 2s and 6s backoff, each attempt bounded by
+  `timeout_seconds` (max 60).
+- **Alerts on transition only**, the same rule as Pulse: one alert when it starts failing, one when
+  it recovers. Not one per failed run.
+- **Run history** in `GET /v1/schedules/:slug`: outcome, status code, duration, attempts, whether
+  it was the cron or a manual run, and the first 512 characters of the response.
+- **Missed slots are skipped, not replayed.** After an outage the next run is computed from *now*,
+  so a backlog never stampedes the customer's endpoint.
+- Outbound requests carry `X-NanoRelay-Run-Id` and `X-NanoRelay-Schedule`. Delivery is
+  at-least-once, so endpoints must be idempotent.
+
+### The target URL is attacker-controlled
+
+A customer chooses the URL we call, which makes Relay an SSRF and abuse vector. Two layers, in
+`src/relay/url-guard.ts`:
+
+1. **Shape** — https only, no credentials, no `localhost`/`.internal`/`.local` host, and any IP
+   literal must be public.
+2. **Resolution** — the hostname is resolved over DoH and every answer must be a public address.
+   This runs before *every* execution, not just at creation, because DNS can be repointed at
+   `10.x` afterwards. Verified against `localtest.me`, a public name pointing at 127.0.0.1.
+
+Redirects are not followed (`redirect: "manual"`), since a redirect could land somewhere private.
+
+`RELAY_ALLOW_PRIVATE_TARGETS=true` disables both layers so you can point a schedule at a local
+server. It belongs in `.dev.vars` and must never be set in production.
+
 ## Provisioning customers
 
 Customers are provisioned from the terminal with the admin endpoint, which is guarded by the
@@ -91,8 +150,8 @@ just adds another key (`user_created: false`). If `ADMIN_TOKEN` is not set, the 
 
 ### Quotas
 
-Each user has a `monitor_limit` (default 5). There is no plan catalogue — a "plan" is just that
-number, so upgrading a customer is one call:
+Each user has a `monitor_limit` (default 5), and it covers **monitors and schedules together** — a
+plan is one integer, not a catalogue, so upgrading a customer is one call:
 
 ```bash
 curl -X PATCH https://pulse.nano-api.com/v1/admin/users/customer@example.com \
@@ -104,19 +163,19 @@ It can also be set when provisioning (`{"email":"...","monitor_limit":100}`), an
 their own usage in `GET /v1/whoami`:
 
 ```json
-{ "monitors": { "used": 3, "limit": 5, "remaining": 2 } }
+{ "usage": { "monitors": 1, "schedules": 3, "used": 4, "limit": 5, "remaining": 1 } }
 ```
 
-The limit guards monitor *creation* only — both `POST /v1/monitors` and the auto-create on first
-ping, which answer:
+The limit guards *creation* only — `POST /v1/monitors`, the auto-create on first ping, and
+`POST /v1/schedules` — which answer:
 
 ```json
-{ "error": { "code": "monitor_limit_reached", "message": "...", "used": 5, "limit": 5 } }
+{ "error": { "code": "quota_exceeded", "message": "...", "used": 5, "limit": 5 } }
 ```
 
-Pings to monitors that already exist are never rejected for quota reasons, so lowering a limit can
-never silently stop a customer's monitoring. Deleting a monitor frees a slot immediately. For an
-effectively unlimited customer, set a large number.
+Pings to existing monitors and runs of existing schedules are never rejected for quota reasons, so
+lowering a limit can never silently stop a customer's monitoring. Deleting either frees a slot
+immediately. For an effectively unlimited customer, set a large number.
 
 ### Key rotation (self-service)
 
@@ -135,8 +194,9 @@ first, then revoke the old key with the new one.
 
 ```bash
 npm install
-cp .dev.vars.example .dev.vars   # local ADMIN_TOKEN, gitignored
+cp .dev.vars.example .dev.vars   # local ADMIN_TOKEN + Relay dev flag, gitignored
 npm run dev                      # applies migrations + seed, then starts wrangler dev on :8787
+npm test                         # cron/DST and URL-guard unit tests
 ./scripts/smoke.sh               # end-to-end check against the running server
 ```
 
@@ -155,6 +215,20 @@ npx wrangler dev --test-scheduled      # then: curl http://localhost:8787/__sche
 npm run check                          # tsc + wrangler deploy --dry-run
 ```
 
+## Code layout
+
+```
+src/core/    identity and plumbing every service shares: API-key auth, key minting,
+             user provisioning, the quota, alert delivery, ids, time, validation
+src/pulse/   heartbeat monitoring: monitors, the overdue sweep, ping and monitor routes
+src/relay/   scheduled calls: cron parsing, the run engine, target URL guard, routes
+```
+
+The boundary is deliberate. `core` knows nothing about monitors or schedules, which is what keeps
+a future split into two Workers a matter of moving directories rather than untangling imports. See
+`ROADMAP.md` in the site repo for the triggers that would justify that split; none of them are
+true yet.
+
 ## Data model
 
 `migrations/0001_init_pulse_schema.sql` creates:
@@ -165,6 +239,9 @@ npm run check                          # tsc + wrangler deploy --dry-run
 - `monitors` — one per watched job: slug, interval, grace, status, `last_ping_at`, webhook.
 - `ping_logs` — every received ping with IP, user agent and optional payload.
 - `monitor_events` — `down` / `up` transitions and whether the alert was delivered.
+- `schedules` — Relay: cron, timezone, target request, retry policy, `next_run_at`, `last_status`.
+- `schedule_runs` — every execution with outcome, status code, duration, attempts and response
+  excerpt.
 
 All timestamps are unix epoch seconds (UTC) in the database and ISO-8601 in the API.
 

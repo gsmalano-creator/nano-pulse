@@ -1,12 +1,14 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { requireAdminToken, requireApiKey } from "./lib/auth";
-import { runDueChecks } from "./lib/checks";
-import { monitorUsage } from "./lib/limits";
-import admin from "./routes/admin";
-import keys from "./routes/keys";
-import monitors from "./routes/monitors";
-import ping from "./routes/ping";
+import { requireAdminToken, requireApiKey } from "./core/auth";
+import { runDueChecks } from "./pulse/checks";
+import { runDueSchedules } from "./relay/runner";
+import { quotaUsage } from "./core/limits";
+import admin from "./core/routes/admin";
+import keys from "./core/routes/keys";
+import monitors from "./pulse/routes/monitors";
+import schedules from "./relay/routes/schedules";
+import ping from "./pulse/routes/ping";
 import type { AppEnv } from "./types";
 
 const app = new Hono<AppEnv>();
@@ -47,8 +49,9 @@ function statusCode(status: number): string {
 
 app.get("/", (c) =>
 	c.json({
-		service: "nanopulse",
-		description: "Dead man's switch for cron jobs, background workers and servers.",
+		service: "nano-api",
+		description:
+			"NanoPulse tells you when a job you depend on has stopped running. NanoRelay runs the job for you.",
 		version: "v1",
 		endpoints: {
 			ping: "POST /v1/ping/:slug",
@@ -61,6 +64,12 @@ app.get("/", (c) =>
 			list_keys: "GET /v1/keys",
 			create_key: "POST /v1/keys",
 			revoke_key: "DELETE /v1/keys/:id",
+			list_schedules: "GET /v1/schedules",
+			create_schedule: "POST /v1/schedules",
+			schedule_detail: "GET /v1/schedules/:slug",
+			update_schedule: "PATCH /v1/schedules/:slug",
+			delete_schedule: "DELETE /v1/schedules/:slug",
+			run_schedule_now: "POST /v1/schedules/:slug/run",
 		},
 		path_alias: "Every /v1/* route is also served under /pulse/v1/*.",
 		auth: "Authorization: Bearer <api_key>",
@@ -89,6 +98,7 @@ v1.use("*", requireApiKey);
 v1.route("/ping", ping);
 v1.route("/monitors", monitors);
 v1.route("/keys", keys);
+v1.route("/schedules", schedules);
 
 // Manual sweep, scoped to the caller. Useful while testing without waiting for cron.
 v1.post("/checks/run", async (c) => c.json(await runDueChecks(c.env, { userId: c.get("user").id })));
@@ -99,7 +109,7 @@ v1.get("/whoami", async (c) => {
 	return c.json({
 		user: { email: user.email },
 		api_key: { name: apiKey.name, prefix: apiKey.key_prefix },
-		monitors: await monitorUsage(c.env, user),
+		usage: await quotaUsage(c.env, user),
 	});
 });
 
@@ -111,6 +121,8 @@ app.route("/pulse/v1", v1);
 export default {
 	fetch: app.fetch,
 	async scheduled(_controller, env, ctx) {
+		// Pulse looks for silence; Relay does the work. One trigger drives both,
+		// and neither is allowed to take the other down.
 		ctx.waitUntil(
 			runDueChecks(env)
 				.then((summary) => {
@@ -119,6 +131,17 @@ export default {
 					}
 				})
 				.catch((error) => console.error("scheduled check failed", error)),
+		);
+		ctx.waitUntil(
+			runDueSchedules(env)
+				.then((summary) => {
+					if (summary.schedules_run > 0) {
+						console.log(
+							`ran ${summary.schedules_run} schedule(s), ${summary.failed} failed: ${summary.slugs.join(", ")}`,
+						);
+					}
+				})
+				.catch((error) => console.error("scheduled relay sweep failed", error)),
 		);
 	},
 } satisfies ExportedHandler<Env>;

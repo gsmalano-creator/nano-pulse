@@ -7,6 +7,10 @@
 		{
 			"pattern": "pulse.nano-api.com",
 			"custom_domain": true
+		},
+		{
+			"pattern": "relay.nano-api.com",
+			"custom_domain": true
 		}
 	],
 	"d1_databases": [

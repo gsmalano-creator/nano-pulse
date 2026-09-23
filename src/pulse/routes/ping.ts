@@ -1,18 +1,18 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { recordEvent } from "../lib/alerts";
-import { newId } from "../lib/ids";
-import { assertMonitorQuota } from "../lib/limits";
+import { recordEvent } from "../events";
+import { newId } from "../../core/ids";
+import { assertQuota } from "../../core/limits";
 import {
 	DEFAULT_GRACE_SECONDS,
 	DEFAULT_INTERVAL_SECONDS,
 	parseGrace,
 	parseInterval,
-	parseSlug,
 	serializeMonitor,
-} from "../lib/monitors";
-import { nowSeconds } from "../lib/time";
-import type { AppEnv, MonitorRow } from "../types";
+} from "../monitors";
+import { parseSlug } from "../../core/validation";
+import { nowSeconds } from "../../core/time";
+import type { AppEnv, MonitorRow } from "../../types";
 
 /** Pings may carry a small payload (e.g. job stats); anything bigger is dropped. */
 const MAX_PAYLOAD_BYTES = 2048;
@@ -50,7 +50,7 @@ ping.on(["POST", "GET"], "/:slug", async (c) => {
 	if (!monitor) {
 		// Auto-provision on first ping so customers can start without a setup call.
 		// Quota applies here, and ON CONFLICT makes two simultaneous first pings safe.
-		await assertMonitorQuota(c.env, user);
+		await assertQuota(c.env, user, "monitor");
 
 		await c.env.DB.prepare(
 			`INSERT INTO monitors (id, user_id, slug, expected_interval_seconds, grace_period_seconds, created_at, updated_at)

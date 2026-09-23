@@ -8,7 +8,7 @@
 	"private": true,
 	"scripts": {
 		"cf-typegen": "wrangler types",
-		"check": "tsc && wrangler deploy --dry-run",
+		"check": "npm test && tsc && wrangler deploy --dry-run",
 		"dev": "npm run db:migrate:local && npm run db:seed:local && wrangler dev",
 		"deploy": "wrangler deploy",
 		"predeploy": "wrangler d1 migrations apply DB --remote",
@@ -16,7 +16,8 @@
 		"db:migrate:remote": "wrangler d1 migrations apply DB --remote",
 		"db:seed:local": "wrangler d1 execute DB --local --file=./seeds/test-data.sql",
 		"db:seed:remote": "wrangler d1 execute DB --remote --file=./seeds/test-data.sql",
-		"smoke": "./scripts/smoke.sh"
+		"smoke": "./scripts/smoke.sh",
+		"test": "node --experimental-strip-types --test test/*.test.ts"
 	},
 	"dependencies": {
 		"hono": "^4.13.8"

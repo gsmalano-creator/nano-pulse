@@ -7,8 +7,8 @@ import {
 	parseMonitorLimit,
 	provisionUser,
 	setMonitorLimit,
-} from "../lib/users";
-import type { AppEnv } from "../types";
+} from "../users";
+import type { AppEnv } from "../../types";
 
 const admin = new Hono<AppEnv>();
 

@@ -1,3 +1,7 @@
 # Copy to .dev.vars for local development (gitignored).
 # In production this is set with: npx wrangler secret put ADMIN_TOKEN
 ADMIN_TOKEN=local-admin-token
+
+# Dev only: lets Relay call http:// and private hosts so you can point a
+# schedule at a local server. Never set this in production.
+RELAY_ALLOW_PRIVATE_TARGETS=true

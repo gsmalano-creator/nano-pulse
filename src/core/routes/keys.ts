@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { issueApiKey, parseKeyName } from "../lib/users";
-import { nowSeconds, toIso } from "../lib/time";
-import type { ApiKeyRow, AppEnv } from "../types";
+import { issueApiKey, parseKeyName } from "../users";
+import { nowSeconds, toIso } from "../time";
+import type { ApiKeyRow, AppEnv } from "../../types";
 
 const keys = new Hono<AppEnv>();
 

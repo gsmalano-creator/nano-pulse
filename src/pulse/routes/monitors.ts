@@ -1,19 +1,17 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { newId } from "../lib/ids";
-import { assertMonitorQuota } from "../lib/limits";
+import { newId } from "../../core/ids";
+import { assertQuota } from "../../core/limits";
 import {
 	DEFAULT_GRACE_SECONDS,
 	DEFAULT_INTERVAL_SECONDS,
 	parseGrace,
 	parseInterval,
-	parseName,
-	parseSlug,
-	parseWebhookUrl,
 	serializeMonitor,
-} from "../lib/monitors";
-import { nowSeconds, toIso } from "../lib/time";
-import type { AppEnv, MonitorEventRow, MonitorRow, PingLogRow } from "../types";
+} from "../monitors";
+import { parseName, parseSlug, parseWebhookUrl } from "../../core/validation";
+import { nowSeconds, toIso } from "../../core/time";
+import type { AppEnv, MonitorEventRow, MonitorRow, PingLogRow } from "../../types";
 
 const RECENT_LIMIT = 20;
 
@@ -80,7 +78,7 @@ monitors.post("/", async (c) => {
 		});
 	}
 
-	await assertMonitorQuota(c.env, c.get("user"));
+	await assertQuota(c.env, c.get("user"), "monitor");
 
 	await c.env.DB.prepare(
 		`INSERT INTO monitors (id, user_id, slug, name, expected_interval_seconds, grace_period_seconds,

@@ -1,7 +1,6 @@
-import { nowSeconds } from "./time";
+import { postAlert } from "../core/alerts";
+import { nowSeconds } from "../core/time";
 import type { MonitorRow } from "../types";
-
-const WEBHOOK_TIMEOUT_MS = 5000;
 
 /**
  * Records a state transition and, when a webhook is configured, delivers it.
@@ -33,36 +32,16 @@ export async function recordEvent(
 	}
 }
 
-async function deliverWebhook(
+function deliverWebhook(
 	monitor: MonitorRow,
 	eventType: "down" | "up",
 	message: string,
 ): Promise<boolean> {
-	const icon = eventType === "down" ? "🔴" : "🟢";
-	const body = {
-		text: `${icon} ${message}`,
-		event: eventType,
+	return postAlert(monitor.alert_webhook_url as string, eventType, message, {
 		monitor: monitor.slug,
 		monitor_name: monitor.name,
 		expected_interval_seconds: monitor.expected_interval_seconds,
 		grace_period_seconds: monitor.grace_period_seconds,
 		service: "nanopulse",
-	};
-
-	try {
-		const response = await fetch(monitor.alert_webhook_url as string, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify(body),
-			signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
-		});
-		if (!response.ok) {
-			console.error(`webhook for ${monitor.slug} returned HTTP ${response.status}`);
-			return false;
-		}
-		return true;
-	} catch (error) {
-		console.error(`webhook for ${monitor.slug} failed`, error);
-		return false;
-	}
+	});
 }

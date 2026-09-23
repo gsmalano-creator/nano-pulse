@@ -1,0 +1,15 @@
+{
+	"permissions": {
+		"allow": [
+			"Bash(cd *)",
+			"Bash(npm run *)",
+			"Bash(npm install)",
+			"Bash(npm install *)",
+			"Bash(npx wrangler *)",
+			"Bash(npx astro *)",
+			"Bash(npx tsc)",
+			"Bash(pkill -f wrangler dev)",
+			"Bash(/Applications/Google Chrome.app/Contents/MacOS/Google Chrome *)"
+		]
+	}
+}
