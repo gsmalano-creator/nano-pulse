@@ -1,12 +1,14 @@
 # nano-api
 
-Two services in one Worker, sharing one database, one API key and one quota.
+Three services in one Worker, sharing one database, one API key and one quota.
 
 - **NanoPulse** (`pulse.nano-api.com`) tells you when a job you depend on has stopped running. Your
   job pings on every success; if the ping does not arrive within the expected interval plus a grace
   period, the monitor goes **down** and an alert goes out.
 - **NanoRelay** (`relay.nano-api.com`) is the other half: we call *your* endpoint on a cron
   schedule, with timezone-correct timing, retries, timeouts and alerting on failure.
+- **NanoLock** keeps two of them from running at once: `flock` over HTTP, with a TTL lease, a
+  token only the holder knows, and a fencing counter.
 
 Built on Cloudflare Workers + D1 + Hono. One Cron Trigger drives both: the Pulse overdue sweep and
 the Relay run sweep. They share `users`, `api_keys`, the quota and the alert delivery code, which
@@ -44,6 +46,11 @@ All `/v1/*` endpoints require `Authorization: Bearer <api_key>`.
 | `PATCH` | `/v1/schedules/:slug` | Update any field, including `paused` |
 | `DELETE` | `/v1/schedules/:slug` | Delete a schedule and its run history |
 | `POST` | `/v1/schedules/:slug/run` | Run now, without moving the schedule's own clock |
+| `GET` | `/v1/locks` | List your locks and whether they are held |
+| `POST` | `/v1/locks/:name` | Acquire. 201 with a token, or 409 if held |
+| `GET` | `/v1/locks/:name` | Status, without revealing the holder's token |
+| `POST` | `/v1/locks/:name/renew` | Extend the lease. Requires the token |
+| `DELETE` | `/v1/locks/:name` | Release. Requires the token |
 
 ### Ping
 
@@ -128,6 +135,46 @@ Redirects are not followed (`redirect: "manual"`), since a redirect could land s
 
 `RELAY_ALLOW_PRIVATE_TARGETS=true` disables both layers so you can point a schedule at a local
 server. It belongs in `.dev.vars` and must never be set in production.
+
+## NanoLock
+
+```bash
+# Acquire, or find out who has it
+curl -X POST "$B/v1/locks/nightly-import?ttl=60&owner=$HOSTNAME" -H "Authorization: Bearer $KEY"
+# -> 201 {"acquired":true,"token":"3d8a…","fence":4,"expires_at":"…"}
+# -> 409 {"error":{"code":"lock_held","held_until":"…","owner":"pod-a"}}
+
+curl -X POST "$B/v1/locks/nightly-import/renew?token=$TOKEN&ttl=60" -H "Authorization: Bearer $KEY"
+curl -X DELETE "$B/v1/locks/nightly-import?token=$TOKEN" -H "Authorization: Bearer $KEY"
+```
+
+Non-blocking on purpose: you get the lock or you get 409, and the caller decides whether to retry.
+There is no queue and no held-open connection.
+
+### The guarantee, and its limits
+
+Acquire is **one atomic statement** — an upsert that only overwrites a row whose lease has already
+expired, with `RETURNING` to say whether it applied. Two simultaneous callers cannot both win; the
+loser gets an empty result and a 409. Verified with 20 parallel requests against a fresh lock:
+exactly one 201, nineteen 409s.
+
+Release and renew are **token-scoped**. The token is returned only to the acquirer, so a process
+that stalled past its TTL cannot release a lock somebody else now holds, and `GET` never reveals
+it.
+
+`fence` is a **monotonically increasing counter per lock name**, handed to each holder. It exists
+because a TTL lease alone is not safe: if your process pauses past the TTL (GC, a suspended VM),
+another caller legitimately acquires, and now two processes believe they hold the lock. The fix is
+for the resource you are protecting to remember the highest fence it has seen and reject anything
+older. That is why releasing **expires** the row instead of deleting it — a deleted row would
+restart the counter at 1, and a fencing check would then reject the legitimate new holder. Rows
+are swept only after 30 days unused, so a name left alone that long starts over.
+
+Be honest with yourself about what this is: a lease, not consensus. Renew while you work, keep the
+TTL above your worst-case runtime, and use the fence where correctness actually matters.
+
+Locks do **not** count against the monitor/schedule quota — that quota is for things we watch or
+run for you. There is a ceiling of 100 distinct lock names per user, purely to bound abuse.
 
 ## Provisioning customers
 
@@ -222,6 +269,7 @@ src/core/    identity and plumbing every service shares: API-key auth, key minti
              user provisioning, the quota, alert delivery, ids, time, validation
 src/pulse/   heartbeat monitoring: monitors, the overdue sweep, ping and monitor routes
 src/relay/   scheduled calls: cron parsing, the run engine, target URL guard, routes
+src/lock/    mutual exclusion: lease acquire/renew/release, fencing, routes
 ```
 
 The boundary is deliberate. `core` knows nothing about monitors or schedules, which is what keeps
@@ -242,6 +290,8 @@ true yet.
 - `schedules` — Relay: cron, timezone, target request, retry policy, `next_run_at`, `last_status`.
 - `schedule_runs` — every execution with outcome, status code, duration, attempts and response
   excerpt.
+- `locks` — one row per (user, lock name): current token, owner, lease expiry and the fence
+  counter, which outlives any individual acquisition.
 
 All timestamps are unix epoch seconds (UTC) in the database and ISO-8601 in the API.
 

@@ -2,14 +2,36 @@
 	"permissions": {
 		"allow": [
 			"Bash(cd *)",
+			"Bash(ls *)",
+			"Bash(cat *)",
+			"Bash(head *)",
+			"Bash(tail *)",
+			"Bash(grep *)",
+			"Bash(find *)",
+			"Bash(sed *)",
+			"Bash(echo *)",
+			"Bash(printf *)",
+			"Bash(mkdir *)",
+			"Bash(cp *)",
+			"Bash(mv *)",
+			"Bash(rm -f /tmp/*)",
+			"Bash(rm -f .inspect-*)",
+			"Bash(dig *)",
+			"Bash(curl *)",
+			"Bash(node *)",
+			"Bash(python3 *)",
 			"Bash(npm run *)",
+			"Bash(npm test)",
 			"Bash(npm install)",
 			"Bash(npm install *)",
-			"Bash(npx wrangler *)",
-			"Bash(npx astro *)",
-			"Bash(npx tsc)",
-			"Bash(pkill -f wrangler dev)",
+			"Bash(npm uninstall *)",
+			"Bash(npx *)",
+			"Bash(pkill *)",
+			"Bash(./scripts/smoke.sh *)",
 			"Bash(/Applications/Google Chrome.app/Contents/MacOS/Google Chrome *)"
+		],
+		"additionalDirectories": [
+			"/Users/gasma783/source/gsmalano/nano-home"
 		]
 	}
 }

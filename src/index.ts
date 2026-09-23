@@ -2,11 +2,13 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { requireAdminToken, requireApiKey } from "./core/auth";
 import { runDueChecks } from "./pulse/checks";
+import { purgeExpiredLocks } from "./lock/locks";
 import { runDueSchedules } from "./relay/runner";
 import { quotaUsage } from "./core/limits";
 import admin from "./core/routes/admin";
 import keys from "./core/routes/keys";
 import monitors from "./pulse/routes/monitors";
+import locksRoutes from "./lock/routes/locks";
 import schedules from "./relay/routes/schedules";
 import ping from "./pulse/routes/ping";
 import type { AppEnv } from "./types";
@@ -51,7 +53,7 @@ app.get("/", (c) =>
 	c.json({
 		service: "nano-api",
 		description:
-			"NanoPulse tells you when a job you depend on has stopped running. NanoRelay runs the job for you.",
+			"NanoPulse tells you when a job you depend on has stopped running. NanoRelay runs the job for you. NanoLock keeps two of them from running at once.",
 		version: "v1",
 		endpoints: {
 			ping: "POST /v1/ping/:slug",
@@ -70,6 +72,11 @@ app.get("/", (c) =>
 			update_schedule: "PATCH /v1/schedules/:slug",
 			delete_schedule: "DELETE /v1/schedules/:slug",
 			run_schedule_now: "POST /v1/schedules/:slug/run",
+			list_locks: "GET /v1/locks",
+			acquire_lock: "POST /v1/locks/:name",
+			lock_status: "GET /v1/locks/:name",
+			renew_lock: "POST /v1/locks/:name/renew",
+			release_lock: "DELETE /v1/locks/:name",
 		},
 		path_alias: "Every /v1/* route is also served under /pulse/v1/*.",
 		auth: "Authorization: Bearer <api_key>",
@@ -99,6 +106,7 @@ v1.route("/ping", ping);
 v1.route("/monitors", monitors);
 v1.route("/keys", keys);
 v1.route("/schedules", schedules);
+v1.route("/locks", locksRoutes);
 
 // Manual sweep, scoped to the caller. Useful while testing without waiting for cron.
 v1.post("/checks/run", async (c) => c.json(await runDueChecks(c.env, { userId: c.get("user").id })));
@@ -131,6 +139,10 @@ export default {
 					}
 				})
 				.catch((error) => console.error("scheduled check failed", error)),
+		);
+		// Locks expire on read; this only stops long-dead rows accumulating.
+		ctx.waitUntil(
+			purgeExpiredLocks(env).catch((error) => console.error("lock purge failed", error)),
 		);
 		ctx.waitUntil(
 			runDueSchedules(env)

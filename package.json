@@ -2,6 +2,7 @@
 	"name": "nano-pulse",
 	"description": "NanoPulse - heartbeat / dead man's switch API on Cloudflare Workers + D1",
 	"devDependencies": {
+		"tsx": "^4.23.15",
 		"typescript": "5.9.3",
 		"wrangler": "4.127.0"
 	},
@@ -17,7 +18,7 @@
 		"db:seed:local": "wrangler d1 execute DB --local --file=./seeds/test-data.sql",
 		"db:seed:remote": "wrangler d1 execute DB --remote --file=./seeds/test-data.sql",
 		"smoke": "./scripts/smoke.sh",
-		"test": "node --experimental-strip-types --test test/*.test.ts"
+		"test": "node --import tsx --test test/*.test.ts"
 	},
 	"dependencies": {
 		"hono": "^4.13.8"

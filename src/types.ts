@@ -75,6 +75,17 @@ export interface ScheduleRow {
 	updated_at: number;
 }
 
+export interface LockRow {
+	id: string;
+	user_id: string;
+	name: string;
+	token: string;
+	owner: string | null;
+	fence: number;
+	acquired_at: number;
+	expires_at: number;
+}
+
 export type RunOutcome = "ok" | "http_error" | "timeout" | "network_error" | "blocked";
 
 export interface ScheduleRunRow {
