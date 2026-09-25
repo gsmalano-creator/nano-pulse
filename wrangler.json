@@ -23,6 +23,10 @@
 		{
 			"pattern": "count.nano-api.com",
 			"custom_domain": true
+		},
+		{
+			"pattern": "dash.nano-api.com",
+			"custom_domain": true
 		}
 	],
 	"vars": {

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { parseScope } from "../keys";
 import { issueApiKey, parseKeyName } from "../users";
 import { nowSeconds, toIso } from "../time";
 import type { ApiKeyRow, AppEnv } from "../../types";
@@ -12,6 +13,7 @@ function serializeKey(row: ApiKeyRow) {
 		name: row.name,
 		// The full key is unrecoverable; the prefix is what identifies it afterwards.
 		key_prefix: row.key_prefix,
+		scope: row.scope,
 		created_at: toIso(row.created_at),
 		last_used_at: toIso(row.last_used_at),
 		revoked_at: toIso(row.revoked_at),
@@ -32,19 +34,28 @@ keys.get("/", async (c) => {
 	});
 });
 
-/** Issues an additional key for the caller. Used for rotation. */
+/**
+ * Issues an additional key for the caller: rotation, and read-only keys for
+ * anything that should look but not touch.
+ *
+ * Reaching this route at all needs a write key, since it is a POST. That is the
+ * property that makes the scope hold: a read key cannot mint itself a wider one.
+ */
 keys.post("/", async (c) => {
 	let name = "API key";
+	let scope = parseScope(undefined);
 	if (c.req.header("content-length") && c.req.header("content-length") !== "0") {
 		try {
 			const body = (await c.req.json()) as Record<string, unknown>;
 			name = parseKeyName(body?.name);
-		} catch {
+			scope = parseScope(body?.scope);
+		} catch (error) {
+			if (error instanceof HTTPException) throw error;
 			throw new HTTPException(400, { message: "Request body must be JSON." });
 		}
 	}
 
-	const issued = await issueApiKey(c.env, c.get("user").id, name);
+	const issued = await issueApiKey(c.env, c.get("user").id, name, scope);
 	return c.json({ ...issued, name }, 201);
 });
 

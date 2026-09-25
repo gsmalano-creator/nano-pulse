@@ -1,6 +1,8 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { requireAdminToken, requireApiKey } from "./core/auth";
+import { contentSecurityPolicy, dashboardHtml } from "./dash/page";
 import { runDueChecks } from "./pulse/checks";
 import { purgeExpiredLocks } from "./lock/locks";
 import { runDueSchedules } from "./relay/runner";
@@ -55,7 +57,32 @@ function statusCode(status: number): string {
 	}
 }
 
-app.get("/", (c) =>
+/**
+ * The read-only dashboard. Served from this worker on purpose: the worker
+ * answers the whole API on every hostname it is routed to, so the page can
+ * fetch /v1/monitors on its own origin. Hosting it anywhere else would mean
+ * opening CORS on authenticated endpoints, which is a larger hole than a
+ * dashboard is worth.
+ */
+function serveDashboard(c: Context<AppEnv>) {
+	const nonce = crypto.randomUUID().replace(/-/g, "");
+	const url = new URL(c.req.url);
+	// Documented curl examples should point at a host the reader can use.
+	const pulseBase = url.hostname.endsWith("nano-api.com")
+		? "https://pulse.nano-api.com"
+		: url.origin;
+
+	c.header("content-type", "text/html; charset=utf-8");
+	c.header("content-security-policy", contentSecurityPolicy(nonce));
+	c.header("referrer-policy", "no-referrer");
+	c.header("x-content-type-options", "nosniff");
+	// A key gets pasted into this page; it has no business in someone's frame.
+	c.header("x-frame-options", "DENY");
+	c.header("cache-control", "no-store");
+	return c.html(dashboardHtml(nonce, pulseBase));
+}
+
+const apiIndex = (c: Context<AppEnv>) =>
 	c.json({
 		service: "nano-api",
 		description:
@@ -71,7 +98,7 @@ app.get("/", (c) =>
 			run_checks: "POST /v1/checks/run",
 			sign_up: "POST /v1/signup (no key needed — this is how you get one)",
 			list_keys: "GET /v1/keys",
-			create_key: "POST /v1/keys",
+			create_key: "POST /v1/keys  (body: {\"scope\": \"read\" | \"write\"})",
 			revoke_key: "DELETE /v1/keys/:id",
 			list_schedules: "GET /v1/schedules",
 			create_schedule: "POST /v1/schedules",
@@ -100,8 +127,15 @@ app.get("/", (c) =>
 		},
 		path_alias: "Every /v1/* route is also served under /pulse/v1/*.",
 		auth: "Authorization: Bearer <api_key>",
-	}),
-);
+	});
+
+// Reachable at /dash on any host, which is what makes it testable locally.
+app.get("/dash", serveDashboard);
+
+app.get("/", (c) => {
+	if (new URL(c.req.url).hostname.startsWith("dash.")) return serveDashboard(c);
+	return apiIndex(c);
+});
 
 app.get("/health", async (c) => {
 	try {
@@ -147,7 +181,9 @@ v1.get("/whoami", async (c) => {
 	const apiKey = c.get("apiKey");
 	return c.json({
 		user: { email: user.email },
-		api_key: { name: apiKey.name, prefix: apiKey.key_prefix },
+		// scope is here so a client can tell what it is holding before it tries a
+		// write and learns the hard way. The dashboard refuses anything but "read".
+		api_key: { name: apiKey.name, prefix: apiKey.key_prefix, scope: apiKey.scope },
 		usage: await quotaUsage(c.env, user),
 	});
 });

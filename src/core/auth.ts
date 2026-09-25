@@ -1,6 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
-import { sha256Hex } from "./keys";
+import { type KeyScope, scopeAllowsMethod, sha256Hex } from "./keys";
 import { nowSeconds } from "./time";
 import type { ApiKeyRow, AppEnv, UserRow } from "../types";
 
@@ -53,7 +53,7 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next) => {
 
 	const hash = await sha256Hex(token);
 	const row = await c.env.DB.prepare(
-		`SELECT k.id AS k_id, k.user_id, k.name, k.key_prefix, k.key_hash, k.created_at AS k_created_at,
+		`SELECT k.id AS k_id, k.user_id, k.name, k.key_prefix, k.key_hash, k.scope, k.created_at AS k_created_at,
 		        k.last_used_at, k.revoked_at,
 		        u.id AS u_id, u.email, u.created_at AS u_created_at, u.monitor_limit
 		   FROM api_keys k
@@ -73,6 +73,7 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next) => {
 		name: (row.name as string | null) ?? null,
 		key_prefix: row.key_prefix as string,
 		key_hash: row.key_hash as string,
+		scope: row.scope as KeyScope,
 		created_at: row.k_created_at as number,
 		last_used_at: (row.last_used_at as number | null) ?? null,
 		revoked_at: null,
@@ -83,6 +84,14 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next) => {
 		created_at: row.u_created_at as number,
 		monitor_limit: row.monitor_limit as number,
 	};
+
+	// Enforced here rather than per route: a write route added tomorrow is
+	// covered the moment it is mounted, without anyone remembering to guard it.
+	if (!scopeAllowsMethod(apiKey.scope, c.req.method)) {
+		throw new HTTPException(403, {
+			message: `This key is read-only. ${c.req.method} requires a key with scope 'write'.`,
+		});
+	}
 
 	c.set("apiKey", apiKey);
 	c.set("user", user);

@@ -1,3 +1,5 @@
+import type { KeyScope } from "./core/keys";
+
 export type MonitorStatus = "pending" | "ok" | "down" | "paused";
 
 export interface UserRow {
@@ -14,6 +16,7 @@ export interface ApiKeyRow {
 	name: string | null;
 	key_prefix: string;
 	key_hash: string;
+	scope: KeyScope;
 	created_at: number;
 	last_used_at: number | null;
 	revoked_at: number | null;

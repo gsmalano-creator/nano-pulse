@@ -38,8 +38,8 @@ All `/v1/*` endpoints require `Authorization: Bearer <api_key>`.
 | `PATCH` | `/v1/monitors/:slug` | Update `name`, `expected_interval_seconds`, `grace_period_seconds`, `alert_webhook_url`, `paused` |
 | `DELETE` | `/v1/monitors/:slug` | Delete a monitor and its history |
 | `POST` | `/v1/checks/run` | Run the overdue sweep for your own monitors (the cron does this every minute) |
-| `GET` | `/v1/keys` | List your API keys (prefixes only — full keys are unrecoverable) |
-| `POST` | `/v1/keys` | Issue an additional key, for rotation |
+| `GET` | `/v1/keys` | List your API keys (prefixes and scopes; full keys are unrecoverable) |
+| `POST` | `/v1/keys` | Issue an additional key, for rotation or for read-only access |
 | `DELETE` | `/v1/keys/:id` | Revoke a key |
 | `POST` | `/v1/signup` | Self-service. The one route that needs no key, since issuing one is the point |
 | `POST` | `/v1/admin/users` | Provision a customer yourself. Requires the `ADMIN_TOKEN` secret |
@@ -343,6 +343,53 @@ curl -X POST $B/v1/keys -H "Authorization: Bearer $OLD_KEY" -d '{"name":"Rotated
 curl -X DELETE $B/v1/keys/<old_key_id> -H "Authorization: Bearer $NEW_KEY"
 ```
 
+### The dashboard
+
+`dash.nano-api.com` serves a read-only view of everything one key can see:
+heartbeats, schedules, locks, configs, counters and the keys themselves. Also at
+`/dash` on every other host, which is how you reach it in `wrangler dev`.
+
+It lives in this worker rather than in `nano-home`, and that is the whole design:
+the worker answers the full API on every hostname it is routed to, so a page served
+from `dash.nano-api.com` fetches `/v1/monitors` **same-origin**. Hosting it beside
+the marketing site would mean opening CORS on authenticated endpoints, which is a
+bigger hole than a dashboard is worth. It also gives the page its own origin, so a
+script added to the marketing site one day cannot read a key pasted into this one.
+
+`src/dash/page.ts` is one self-contained document: no build step, no framework, no
+third-party resource of any kind, not even a favicon file. The CSP is
+`default-src 'none'` with a per-request nonce and `connect-src 'self'`.
+
+The page **requires a key with `scope: read`** and refuses a write key without
+storing it. A write key would work for every request the page makes, which is
+exactly why it should not be pasted into a browser to look at a list. The accepted
+key is held in `sessionStorage` and dies with the tab.
+
+### Key scopes
+
+A key is `write` (full access) or `read`. Scope is set at creation and cannot be changed
+afterwards; to narrow a key you issue a new one and revoke the old.
+
+```bash
+curl -X POST $B/v1/keys -H "Authorization: Bearer $KEY" \
+  -d '{"name":"dashboard","scope":"read"}'
+```
+
+Enforcement is one check in `requireApiKey`, not a list of protected routes: every read in
+this API is a `GET` and every write is not, so the HTTP method is the whole test. A write
+route added tomorrow is covered the moment it is mounted. A read key gets `403` on anything
+that is not `GET`/`HEAD`/`OPTIONS`.
+
+Two properties worth stating, because they are what make the scope mean anything:
+
+- **No escalation.** Issuing a key is `POST /v1/keys`, so a read key cannot mint a wider one.
+- **Fails closed.** Any scope value this build does not recognise is treated as read-only, so
+  a hand-edited row or a future migration cannot accidentally grant full access.
+
+Keys issued before scopes existed are `write`, by column default.
+```
+```
+
 Revoking the key used for the request is refused (409) so nobody can lock themselves out; rotate
 first, then revoke the old key with the new one.
 
@@ -381,6 +428,7 @@ src/relay/   scheduled calls: cron parsing, the run engine, target URL guard, ro
 src/lock/    mutual exclusion: lease acquire/renew/release, fencing, routes
 src/config/  small JSON documents: validation, merge, versioning, revisions, routes
 src/count/   counters and the SVG badge renderer, plus the public badge route
+src/dash/    the read-only dashboard, as one self-contained HTML document
 ```
 
 The boundary is deliberate. `core` knows nothing about monitors or schedules, which is what keeps
@@ -393,8 +441,9 @@ true yet.
 `migrations/0001_init_pulse_schema.sql` creates:
 
 - `users` — id, email, `monitor_limit`.
-- `api_keys` — SHA-256 hash of the key (never the key itself), plus a display prefix and
-  `last_used_at` / `revoked_at`. A user can hold several keys, which is how rotation works.
+- `api_keys` — SHA-256 hash of the key (never the key itself), plus a display prefix, a
+  `scope` of `read` or `write`, and `last_used_at` / `revoked_at`. A user can hold several
+  keys, which is how rotation and read-only access work.
 - `monitors` — one per watched job: slug, interval, grace, status, `last_ping_at`, webhook.
 - `ping_logs` — every received ping with IP, user agent and optional payload.
 - `monitor_events` — `down` / `up` transitions and whether the alert was delivered.

@@ -1,6 +1,6 @@
 import { HTTPException } from "hono/http-exception";
 import { newId } from "./ids";
-import { generateApiKey, keyPrefix, sha256Hex } from "./keys";
+import { generateApiKey, type KeyScope, keyPrefix, sha256Hex } from "./keys";
 import { nowSeconds } from "./time";
 import type { AppBindings } from "../types";
 
@@ -33,6 +33,7 @@ export interface IssuedKey {
 	api_key: string;
 	key_id: string;
 	key_prefix: string;
+	scope: KeyScope;
 }
 
 /** Mints a key for an existing user and stores only its hash. */
@@ -40,19 +41,20 @@ export async function issueApiKey(
 	env: AppBindings,
 	userId: string,
 	name: string,
+	scope: KeyScope = "write",
 	environment: "live" | "test" = "live",
 ): Promise<IssuedKey> {
 	const apiKey = generateApiKey(environment);
 	const keyId = newId("key");
 
 	await env.DB.prepare(
-		`INSERT INTO api_keys (id, user_id, name, key_prefix, key_hash, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO api_keys (id, user_id, name, key_prefix, key_hash, scope, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	)
-		.bind(keyId, userId, name, keyPrefix(apiKey), await sha256Hex(apiKey), nowSeconds())
+		.bind(keyId, userId, name, keyPrefix(apiKey), await sha256Hex(apiKey), scope, nowSeconds())
 		.run();
 
-	return { api_key: apiKey, key_id: keyId, key_prefix: keyPrefix(apiKey) };
+	return { api_key: apiKey, key_id: keyId, key_prefix: keyPrefix(apiKey), scope };
 }
 
 export function parseMonitorLimit(value: unknown): number {
