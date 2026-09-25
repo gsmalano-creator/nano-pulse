@@ -335,11 +335,14 @@ function renderConfigs(d) {
 function renderCounters(d) {
   var rows = d.counters || [];
   section("counters", "Counters", rows.length, table(
-    ["Name", "Value|num", "Label", "Updated", "Badge"], rows,
+    ["Name", "Value|num", "Kind", "Label", "Updated", "Badge"], rows,
     function (c) {
       var tr = document.createElement("tr");
       tr.appendChild(node("td", "mono", c.name));
       tr.appendChild(node("td", "mono num", c.value));
+      // A monotonic counter is an allocator, not a tally, and the difference
+      // decides whether it is safe to correct by hand.
+      tr.appendChild(node("td", "mono " + (c.monotonic ? "s-ok" : ""), c.monotonic ? "sequence" : "tally"));
       tr.appendChild(node("td", "mono", c.label || "-"));
       tr.appendChild(timeCell(c.updated_at));
       var link = node("td");
@@ -351,6 +354,24 @@ function renderCounters(d) {
       return tr;
     },
     { text: "No counters yet." }));
+}
+
+function renderUniq(d) {
+  var rows = d.keys || [];
+  section("uniq", "Seen keys", rows.length, table(
+    ["Key", "Hits|num", "First seen", "Expires"], rows,
+    function (u) {
+      var tr = document.createElement("tr");
+      tr.appendChild(node("td", "mono", u.key));
+      // More than one hit means a duplicate arrived and was turned away, which
+      // is the endpoint doing its job rather than a problem.
+      tr.appendChild(node("td", "mono num" + (u.hits > 1 ? " s-ok" : ""), u.hits));
+      tr.appendChild(timeCell(u.first_seen_at));
+      tr.appendChild(timeCell(u.expires_at));
+      return tr;
+    },
+    { text: "No live keys. One appears the first time something is claimed:",
+      curl: "curl -X POST $UNIQ/v1/uniq/evt_123?ttl=86400 \\\\\\n  -H \\"Authorization: Bearer $KEY\\"" }));
 }
 
 function renderKeys(d) {
@@ -379,6 +400,7 @@ var PANELS = [
   ["/v1/locks", "locks", "Locks", renderLocks],
   ["/v1/configs", "configs", "Configs", renderConfigs],
   ["/v1/counters", "counters", "Counters", renderCounters],
+  ["/v1/uniq", "uniq", "Seen keys", renderUniq],
   ["/v1/keys", "keys", "API keys", renderKeys]
 ];
 
@@ -537,6 +559,7 @@ export function dashboardHtml(nonce: string, pulseBase: string): string {
   <section id="locks"></section>
   <section id="configs"></section>
   <section id="counters"></section>
+  <section id="uniq"></section>
   <section id="keys"></section>
 </main>
 

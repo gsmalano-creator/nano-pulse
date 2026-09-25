@@ -436,7 +436,9 @@ curl -X DELETE $B/v1/keys/<old_key_id> -H "Authorization: Bearer $NEW_KEY"
 ### The dashboard
 
 `dash.nano-api.com` serves a read-only view of everything one key can see:
-heartbeats, schedules, locks, configs, counters and the keys themselves. Also at
+heartbeats, schedules, locks, configs, counters, seen keys and the API keys themselves.
+Counters say whether they are a `sequence` or a `tally`, because that decides whether
+correcting one by hand is safe. Also at
 `/dash` on every other host, which is how you reach it in `wrangler dev`.
 
 It lives in this worker rather than in `nano-home`, and that is the whole design:
