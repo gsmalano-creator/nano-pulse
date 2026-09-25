@@ -360,6 +360,12 @@ script added to the marketing site one day cannot read a key pasted into this on
 third-party resource of any kind, not even a favicon file. The CSP is
 `default-src 'none'` with a per-request nonce and `connect-src 'self'`.
 
+A config row expands to show the document. That one is fetched per config on
+click rather than with the list, because `GET /v1/configs` returns a key count and
+not the contents, and pulling every document on every 30-second tick would cost a
+request per config for something usually nobody is reading. What is open stays open
+across refreshes.
+
 The page **requires a key with `scope: read`** and refuses a write key without
 storing it. A write key would work for every request the page makes, which is
 exactly why it should not be pasted into a browser to look at a list. The accepted

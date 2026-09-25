@@ -78,13 +78,24 @@ th {
 td { padding:.5em .9em; border-bottom:1px solid var(--border); vertical-align:top; }
 tr:last-child td { border-bottom:none; }
 td.mono, th.mono { font-family:var(--mono); font-size:12px; }
-td.num { text-align:right; font-variant-numeric:tabular-nums; }
+/* The heading has to carry the same alignment as the cells under it, or a
+   right-aligned number sits under a left-aligned word. */
+td.num, th.num { text-align:right; }
+td.num { font-variant-numeric:tabular-nums; }
+/* Identifiers and timestamps are read as single tokens; wrapping them mid-word
+   costs more than the width it saves. */
+td.mono, td.caret { white-space:nowrap; }
 .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:.5em; vertical-align:baseline; }
 .ok { background:var(--alive); } .down { background:var(--alert); }
 .pending { background:var(--muted); } .paused { background:var(--warn); }
 .s-ok { color:var(--alive-ink); } .s-down { color:var(--alert); }
 .s-pending { color:var(--muted); } .s-paused { color:var(--warn); }
 .empty { padding:1.3em .9em; color:var(--muted); font-size:13px; }
+tr.expandable { cursor:pointer; }
+tr.expandable:hover td { background:var(--surface-2); }
+td.caret, th.caret { width:1%; padding-right:0; color:var(--muted); font-family:var(--mono); }
+tr.doc td { padding:0; }
+tr.doc pre { border:none; border-radius:0; background:var(--bg); padding:.9em 1.1em; }
 .empty pre { margin:.7em 0 0; }
 pre {
   margin:0; padding:.8em .9em; background:var(--bg); border:1px solid var(--border);
@@ -258,19 +269,67 @@ function renderLocks(d) {
     { text: "No locks. A lock appears the first time something acquires it." }));
 }
 
+// Which documents the reader has opened. Kept across refreshes so a 30-second
+// tick does not collapse what someone is looking at.
+var openDocs = Object.create(null);
+
+function docRow(name, colspan) {
+  var tr = document.createElement("tr");
+  tr.className = "doc";
+  var td = document.createElement("td");
+  td.colSpan = colspan;
+  var pre = node("pre", null, "loading...");
+  td.appendChild(pre);
+  tr.appendChild(td);
+  // Fetched per document rather than with the list: the list endpoint returns
+  // a key count, not the contents, and pulling every document on every tick
+  // would cost a request per config for something usually nobody is reading.
+  api("/v1/configs/" + encodeURIComponent(name)).then(function (r) {
+    pre.textContent = JSON.stringify(r.data, null, 2);
+  }).catch(function (e) {
+    pre.textContent = "could not load: " + e.message;
+  });
+  return tr;
+}
+
 function renderConfigs(d) {
   var rows = d.configs || [];
-  section("configs", "Configs", rows.length, table(
-    ["Name", "Version|num", "Keys|num", "Updated"], rows,
+  var panel = table(
+    ["|caret", "Name", "Version", "Keys|num", "Updated"], rows,
     function (c) {
       var tr = document.createElement("tr");
+      tr.className = "expandable";
+      tr.appendChild(node("td", "caret", openDocs[c.name] ? "\u2013" : "+"));
       tr.appendChild(node("td", "mono", c.name));
-      tr.appendChild(node("td", "mono num", "v" + c.version));
+      tr.appendChild(node("td", "mono", "v" + c.version));
       tr.appendChild(node("td", "mono num", c.keys));
       tr.appendChild(timeCell(c.updated_at));
+      tr.addEventListener("click", function () {
+        var body = tr.parentNode;
+        var next = tr.nextSibling;
+        if (openDocs[c.name]) {
+          delete openDocs[c.name];
+          tr.firstChild.textContent = "+";
+          if (next && next.className === "doc") body.removeChild(next);
+        } else {
+          openDocs[c.name] = true;
+          tr.firstChild.textContent = "\u2013";
+          body.insertBefore(docRow(c.name, 5), next);
+        }
+      });
       return tr;
     },
-    { text: "No config documents yet." }));
+    { text: "No config documents yet." });
+
+  // Re-open whatever was open before this refresh replaced the table.
+  var body = panel.querySelector("tbody");
+  if (body) {
+    [].slice.call(body.children).forEach(function (tr) {
+      var name = tr.children[1] ? tr.children[1].textContent : null;
+      if (name && openDocs[name]) body.insertBefore(docRow(name, 5), tr.nextSibling);
+    });
+  }
+  section("configs", "Configs", rows.length, panel);
 }
 
 function renderCounters(d) {
