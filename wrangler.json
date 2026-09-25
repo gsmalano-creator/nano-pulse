@@ -27,6 +27,10 @@
 		{
 			"pattern": "dash.nano-api.com",
 			"custom_domain": true
+		},
+		{
+			"pattern": "uniq.nano-api.com",
+			"custom_domain": true
 		}
 	],
 	"vars": {

@@ -14,6 +14,8 @@ import monitors from "./pulse/routes/monitors";
 import badgeRoutes from "./count/routes/badge";
 import configsRoutes from "./config/routes/configs";
 import countersRoutes from "./count/routes/counters";
+import uniqRoutes from "./uniq/routes/uniq";
+import { purgeUniqKeys } from "./uniq/keys";
 import locksRoutes from "./lock/routes/locks";
 import schedules from "./relay/routes/schedules";
 import ping from "./pulse/routes/ping";
@@ -119,6 +121,9 @@ const apiIndex = (c: Context<AppEnv>) =>
 			config_revisions: "GET /v1/configs/:name/revisions",
 			rollback_config: "POST /v1/configs/:name/rollback",
 			delete_config: "DELETE /v1/configs/:name",
+			seen_before: "POST /v1/uniq/:key?ttl=86400  (201 first time, 200 after)",
+			peek_key: "GET /v1/uniq/:key",
+			forget_key: "DELETE /v1/uniq/:key",
 			list_counters: "GET /v1/counters",
 			increment_counter: "POST /v1/counters/:name?by=1",
 			set_counter: "PUT /v1/counters/:name",
@@ -172,6 +177,7 @@ v1.route("/schedules", schedules);
 v1.route("/locks", locksRoutes);
 v1.route("/configs", configsRoutes);
 v1.route("/counters", countersRoutes);
+v1.route("/uniq", uniqRoutes);
 
 // Manual sweep, scoped to the caller. Useful while testing without waiting for cron.
 v1.post("/checks/run", async (c) => c.json(await runDueChecks(c.env, { userId: c.get("user").id })));
@@ -210,6 +216,11 @@ export default {
 		// Locks expire on read; this only stops long-dead rows accumulating.
 		ctx.waitUntil(
 			purgeExpiredLocks(env).catch((error) => console.error("lock purge failed", error)),
+		);
+		// Expiry is honoured on read, so this only reclaims space -- and trims
+		// an account that has blown past the live-key cap.
+		ctx.waitUntil(
+			purgeUniqKeys(env).catch((error) => console.error("uniq purge failed", error)),
 		);
 		ctx.waitUntil(
 			runDueSchedules(env)

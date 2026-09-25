@@ -5,7 +5,7 @@ import { newId } from "../../core/ids";
 import { assertQuota } from "../../core/limits";
 import { nowSeconds } from "../../core/time";
 import { parseSlug } from "../../core/validation";
-import { parseLabel, parseStep, parseValue, serializeCounter } from "../counters";
+import { parseLabel, parseMonotonic, parseStep, parseValue, serializeCounter } from "../counters";
 import type { AppEnv, CounterRow } from "../../types";
 
 const counters = new Hono<AppEnv>();
@@ -42,6 +42,35 @@ async function find(c: Context<AppEnv>, name: string): Promise<CounterRow | null
 		.first<CounterRow>();
 }
 
+/**
+ * The flag is immutable, so explicitly asking for a different one than the
+ * counter was created with is a mistake worth naming rather than ignoring.
+ * Saying nothing is not a mistake: it means "whatever this counter already is".
+ * Reading it before the write is safe because it cannot change underneath us.
+ */
+function assertSameMode(existing: CounterRow | null, wanted: boolean | null): void {
+	if (!existing || wanted === null) return;
+	const isMonotonic = existing.monotonic === 1;
+	if (isMonotonic === wanted) return;
+	throw new HTTPException(409, {
+		message: isMonotonic
+			? `Counter '${existing.name}' was created monotonic and cannot be changed. Omit monotonic, or use a new name.`
+			: `Counter '${existing.name}' was not created monotonic and cannot be changed now. Use a new name.`,
+	});
+}
+
+/** Raised when the single atomic write declined to move the counter. */
+async function refuseBackwards(
+	c: Context<AppEnv>,
+	name: string,
+	attempted: string,
+): Promise<never> {
+	const current = await find(c, name);
+	throw new HTTPException(409, {
+		message: `Counter '${name}' is monotonic and only moves forward. It is at ${current?.value ?? "?"}; ${attempted} was refused.`,
+	});
+}
+
 counters.get("/", async (c) => {
 	const { results } = await c.env.DB.prepare(
 		"SELECT * FROM counters WHERE user_id = ? ORDER BY name ASC",
@@ -63,20 +92,30 @@ counters.post("/:name", async (c) => {
 	const label = parseLabel(body.label ?? c.req.query("label"));
 	const now = nowSeconds();
 
+	const monotonic = parseMonotonic(body.monotonic ?? c.req.query("monotonic"));
+
 	const existing = await find(c, name);
+	assertSameMode(existing, monotonic);
 	if (!existing) await assertQuota(c.env, c.get("user"), "counter");
 
+	// The guard is in the statement, not around it: a read-then-check would let
+	// two concurrent calls both decide they were allowed.
 	const row = await c.env.DB.prepare(
-		`INSERT INTO counters (id, user_id, name, value, label, public_id, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+		`INSERT INTO counters (id, user_id, name, value, label, public_id, monotonic, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
 		 ON CONFLICT (user_id, name) DO UPDATE SET
 		     value = counters.value + excluded.value,
 		     label = coalesce(excluded.label, counters.label),
 		     updated_at = excluded.updated_at
+		 WHERE counters.monotonic = 0 OR excluded.value > 0
 		 RETURNING *`,
 	)
-		.bind(newId("cnt"), c.get("user").id, name, step, label, newId("pub"), now)
+		.bind(newId("cnt"), c.get("user").id, name, step, label, newId("pub"), monotonic === true ? 1 : 0, now)
 		.first<CounterRow>();
+
+	// No row means the WHERE declined it, which can only be a negative step on
+	// a monotonic counter.
+	if (!row) await refuseBackwards(c, name, `a step of ${step}`);
 
 	return c.json({ counter: serializeCounter(row as CounterRow, badgeBase(c)) }, existing ? 200 : 201);
 });
@@ -96,20 +135,26 @@ counters.put("/:name", async (c) => {
 	const label = parseLabel(body.label ?? c.req.query("label"));
 	const now = nowSeconds();
 
+	const monotonic = parseMonotonic(body.monotonic ?? c.req.query("monotonic"));
+
 	const existing = await find(c, name);
+	assertSameMode(existing, monotonic);
 	if (!existing) await assertQuota(c.env, c.get("user"), "counter");
 
 	const row = await c.env.DB.prepare(
-		`INSERT INTO counters (id, user_id, name, value, label, public_id, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+		`INSERT INTO counters (id, user_id, name, value, label, public_id, monotonic, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
 		 ON CONFLICT (user_id, name) DO UPDATE SET
 		     value = excluded.value,
 		     label = coalesce(excluded.label, counters.label),
 		     updated_at = excluded.updated_at
+		 WHERE counters.monotonic = 0 OR excluded.value > counters.value
 		 RETURNING *`,
 	)
-		.bind(newId("cnt"), c.get("user").id, name, value, label, newId("pub"), now)
+		.bind(newId("cnt"), c.get("user").id, name, value, label, newId("pub"), monotonic === true ? 1 : 0, now)
 		.first<CounterRow>();
+
+	if (!row) await refuseBackwards(c, name, `setting it to ${value}`);
 
 	return c.json({ counter: serializeCounter(row as CounterRow, badgeBase(c)) });
 });

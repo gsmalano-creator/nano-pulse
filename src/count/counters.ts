@@ -23,6 +23,22 @@ export function parseValue(value: unknown): number {
 	return next;
 }
 
+/**
+ * Whether this counter is a sequence rather than a tally. Only read when a
+ * counter is created; see the migration for why it cannot be changed later.
+ *
+ * Returns null when the caller did not say. That is not the same as `false`:
+ * omitting it on an increment has to mean "use whatever this counter already
+ * is", or a sequence could never be incremented without repeating the flag
+ * forever.
+ */
+export function parseMonotonic(value: unknown): boolean | null {
+	if (value === undefined || value === null || value === "") return null;
+	if (value === true || value === "true" || value === 1 || value === "1") return true;
+	if (value === false || value === "false" || value === 0 || value === "0") return false;
+	throw new HTTPException(400, { message: "monotonic must be true or false." });
+}
+
 export function parseLabel(value: unknown): string | null {
 	if (value === undefined || value === null || value === "") return null;
 	if (typeof value !== "string") {
@@ -43,6 +59,7 @@ export function serializeCounter(counter: CounterRow, badgeBase: string) {
 	return {
 		name: counter.name,
 		value: counter.value,
+		monotonic: counter.monotonic === 1,
 		label: counter.label,
 		badge_url: `${badgeBase}/b/${counter.public_id}.svg`,
 		json_url: `${badgeBase}/b/${counter.public_id}.json`,

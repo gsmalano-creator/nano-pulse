@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderBadge } from "../src/count/badge.ts";
-import { formatValue, MAX_STEP, parseLabel, parseStep, parseValue } from "../src/count/counters.ts";
+import {
+	formatValue,
+	MAX_STEP,
+	parseLabel,
+	parseMonotonic,
+	parseStep,
+	parseValue,
+	serializeCounter,
+} from "../src/count/counters.ts";
 
 test("the step is a bounded, non-zero integer", () => {
 	assert.equal(parseStep(undefined), 1);
@@ -51,4 +59,33 @@ test("the badge is valid SVG and escapes what it is given", () => {
 test("an unknown colour falls back rather than breaking the image", () => {
 	assert.ok(renderBadge("x", 1, "chartreuse").includes("#35d399"));
 	assert.ok(renderBadge("x", 1, "amber").includes("#fbbf5c"));
+});
+
+test("monotonic is opt-in, and silence is not the same as false", () => {
+	// Omitting it has to mean "leave this counter as it is", or an existing
+	// sequence could never be incremented without repeating the flag.
+	assert.equal(parseMonotonic(undefined), null);
+	assert.equal(parseMonotonic(null), null);
+	assert.equal(parseMonotonic(""), null);
+	for (const yes of [true, "true", 1, "1"]) assert.equal(parseMonotonic(yes), true);
+	for (const no of [false, "false", 0, "0"]) assert.equal(parseMonotonic(no), false);
+	for (const bad of ["yes", "TRUE", 2, {}, [], "monotonic"]) {
+		assert.throws(() => parseMonotonic(bad), `expected ${JSON.stringify(bad)} to be rejected`);
+	}
+});
+
+test("the serialized counter says whether it can go backwards", () => {
+	const row = {
+		id: "cnt_1",
+		user_id: "usr_1",
+		name: "invoice-2026",
+		value: 42,
+		label: null,
+		public_id: "pub_1",
+		monotonic: 1,
+		created_at: 0,
+		updated_at: 0,
+	};
+	assert.equal(serializeCounter(row, "https://count.example").monotonic, true);
+	assert.equal(serializeCounter({ ...row, monotonic: 0 }, "https://count.example").monotonic, false);
 });

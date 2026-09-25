@@ -12,6 +12,7 @@ Several small services in one Worker, sharing one database, one API key and one 
 - **NanoConfig** (`configmaps.nano-api.com`) holds the small JSON documents you would otherwise
   redeploy for: kill switches, feature flags, limits.
 - **NanoCount** (`count.nano-api.com`) counts things, and hands you an SVG badge for the README.
+- **NanoUniq** (`uniq.nano-api.com`) answers whether it has seen a key before, inside a window.
 
 Built on Cloudflare Workers + D1 + Hono. One Cron Trigger drives the background work: the Pulse
 overdue sweep, the Relay run sweep and the lock purge. They share `users`, `api_keys`, the quota and the alert delivery code, which
@@ -257,6 +258,95 @@ Three things decided here:
 `?label=` and `?color=` (green, blue, amber, red, grey) override the badge per request. Values
 shorten past a thousand — `12300` renders as `12k` — because a badge that wide stops being one.
 Counters count against the shared quota.
+
+### Sequences: `?monotonic=true`
+
+An ordinary increment already *is* a sequence allocator. The upsert is atomic and returns the new
+value, so two callers cannot be handed the same number, and `?by=100` returns `V` from which you
+own `V-99 … V` — a batch job needs one round trip, not a hundred.
+
+What an ordinary counter also allows is going backwards: a negative `by`, or a `PUT` to a lower
+value. That is correct for a tally ("the download count is really 12300") and wrong for a
+sequence, where invoice number 42 twice is an accounting problem. So a counter can be created with
+the guarantee instead:
+
+```bash
+curl -X POST "$B/v1/counters/invoice-2026?monotonic=true" -H "Authorization: Bearer $KEY"
+# {"counter":{"value":1,"monotonic":true, …}}
+
+curl -X POST "$B/v1/counters/invoice-2026" -H "Authorization: Bearer $KEY"        # 2
+curl -X POST "$B/v1/counters/invoice-2026?by=100" -H "Authorization: Bearer $KEY" # 102, yours: 3..102
+
+curl -X POST "$B/v1/counters/invoice-2026?by=-5"     -H "Authorization: Bearer $KEY"  # 409
+curl -X PUT  "$B/v1/counters/invoice-2026?value=2"   -H "Authorization: Bearer $KEY"  # 409
+```
+
+The guard is inside the statement, not around it:
+
+```sql
+ON CONFLICT (user_id, name) DO UPDATE SET value = counters.value + excluded.value
+ WHERE counters.monotonic = 0 OR excluded.value > 0
+```
+
+A read-then-check would let two concurrent calls both decide they were allowed. No row comes back
+when the `WHERE` declines, which is how the route knows to answer `409` with the current value.
+
+Two things to know:
+
+- **The flag is fixed at creation**, like `api_keys.scope`, and for the same reason: a counter that
+  could drop the guarantee would not have one. Asking for the opposite of what a counter already is
+  gets a `409` naming the problem; saying nothing means "whatever it already is", so an increment
+  never has to repeat the flag.
+- **It promises no gaps are skipped, not that no gaps exist.** A caller that crashes after
+  allocating 43 loses 43 forever. For downloads that is invisible; where unbroken numbering is a
+  legal requirement, allocation has to happen in the same transaction as the thing being numbered,
+  and no counter over HTTP can do that. Use one counter per year (`invoice-2026`, `invoice-2027`)
+  rather than resetting, since resetting is exactly what "never backwards" forbids.
+
+## NanoUniq
+
+`uniq`, over HTTP. **You supply the key; nothing is generated here.** It is a Stripe event id, a
+delivery id, an order number — an identifier you already hold. The product is the memory, not the
+value: making something unique is local and free, remembering what you have already seen is not.
+
+```bash
+curl -X POST "$B/v1/uniq/evt_1JK2nX8s?ttl=86400" -H "Authorization: Bearer $KEY"
+# 201 {"key":"evt_1JK2nX8s","first_time":true,"hits":1, …}
+
+curl -X POST "$B/v1/uniq/evt_1JK2nX8s?ttl=86400" -H "Authorization: Bearer $KEY"
+# 200 {"key":"evt_1JK2nX8s","first_time":false,"hits":2, …}
+```
+
+The status code is the answer, so a shell script needs no parser:
+
+```bash
+if curl -fsS -X POST "$B/v1/uniq/$DELIVERY_ID" -H "Authorization: Bearer $KEY" -o /dev/null; then
+  process_it          # 201 or 200 both succeed, so check the body, or:
+fi
+```
+
+Three things decided here:
+
+- **The insert is the check.** `SELECT` then `INSERT` is the version everyone writes by hand, and
+  it is wrong: two deliveries arriving together both see nothing and both proceed. Forty
+  simultaneous claims on one key produce exactly one `first_time: true`, which is a thing to
+  verify rather than assume.
+- **`hits` decides "first time", not a timestamp.** Two arrivals in the same second would both
+  match `first_seen_at = now`, and both would be told they were first — the one answer this
+  endpoint must never give twice. The row that comes back with `hits = 1` is the one that created
+  or reset it.
+- **Keys expire.** A key claims a *window*, never forever, because permanent would make this a
+  database rather than an operation. Default 24 hours, maximum 30 days. A delivery that arrives
+  after the window counts as new, so set the ttl above your upstream's retry horizon.
+
+`DELETE /v1/uniq/:key` forgets one. Without it, a crash between claiming and doing the work means
+the work never happens — so claim, work, and delete on failure.
+
+Live keys are capped per account (50,000) and trimmed oldest-first by the per-minute sweep rather
+than checked on the request path: a count per call would double the cost of the cheapest operation
+here, and a minute of lag on a ceiling nobody should reach is the better trade. Keys do **not**
+count against the shared quota, because one per delivery is not the kind of thing a quota of five
+was meant to bound.
 
 ## Signing up
 

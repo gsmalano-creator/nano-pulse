@@ -85,8 +85,19 @@ export interface CounterRow {
 	value: number;
 	label: string | null;
 	public_id: string;
+	/** 1 when the counter refuses to move backwards. Set at creation only. */
+	monotonic: number;
 	created_at: number;
 	updated_at: number;
+}
+
+export interface UniqKeyRow {
+	id: string;
+	user_id: string;
+	key: string;
+	first_seen_at: number;
+	expires_at: number;
+	hits: number;
 }
 
 export interface ConfigRow {
